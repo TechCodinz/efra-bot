@@ -288,12 +288,38 @@ def snapshot() -> dict[str, Any]:
             conf = float(b.get("confluence", 0))
             cost = 2 * (bot.c.fee_bps + bot.c.slippage_bps) + spread
             net_edge = bot.c.tp_bps - cost
-            mom_ok = bot.c.min_mom_bps <= mom <= bot.c.max_mom_bps
-            sig_obi = imb >= bot.c.imbalance_entry and skew >= 0.8 and cvd >= bot.c.min_cvd and mom >= bot.c.min_mom_bps
-            sig_conf = conf >= bot.c.min_confluence and imb >= 0.62 and cvd >= bot.c.min_cvd and mom >= bot.c.min_mom_bps
-            sig_tape = cvd >= 0.72 and imb >= 0.60 and skew >= 0.8 and mom >= bot.c.min_mom_bps
-            paths = [name for name, passed in (("OBI", sig_obi), ("CONF", sig_conf), ("TAPE", sig_tape)) if passed]
-            ready = mom_ok and bool(paths) and net_edge >= bot.c.min_net_edge_bps
+            effective_min_mom = max(
+                bot.c.min_mom_bps,
+                cost * bot.c.min_impulse_cost_ratio,
+            )
+            mom_ok = effective_min_mom <= mom <= bot.c.max_mom_bps
+            sig_obi = (
+                imb >= bot.c.imbalance_entry
+                and skew >= 0.8
+                and cvd >= bot.c.min_cvd
+                and mom >= effective_min_mom
+            )
+            sig_conf = (
+                conf >= bot.c.min_confluence
+                and imb >= 0.62
+                and cvd >= bot.c.min_cvd
+                and mom >= effective_min_mom
+            )
+            sig_tape = (
+                cvd >= 0.72
+                and imb >= 0.60
+                and skew >= 0.8
+                and mom >= effective_min_mom
+            )
+            paths = [
+                name
+                for name, passed in (("OBI", sig_obi), ("CONF", sig_conf), ("TAPE", sig_tape))
+                if passed
+            ]
+            path_ok = len(paths) >= bot.c.min_signal_paths
+            confidence_ok = conf >= bot.c.min_entry_confidence
+            edge_ok = net_edge >= bot.c.min_net_edge_bps
+            ready = mom_ok and path_ok and confidence_ok and edge_ok
             radar.append({
                 "symbol": sym,
                 "mid": float(b.get("mid", 0)),
@@ -304,7 +330,11 @@ def snapshot() -> dict[str, Any]:
                 "momentum_bps": mom,
                 "confluence": conf,
                 "net_edge_bps": net_edge,
+                "effective_min_mom_bps": effective_min_mom,
                 "path": "+".join(paths) if paths else "—",
+                "path_count": len(paths),
+                "path_required": bot.c.min_signal_paths,
+                "confidence_required": bot.c.min_entry_confidence,
                 "ready": ready,
                 "status": "position" if sym in bot.pos else "pending" if sym in pending_map else "signal_ready" if ready else "monitoring",
             })
@@ -324,13 +354,20 @@ def snapshot() -> dict[str, Any]:
             if net_bps_samples else 0.0
         )
         slots, alloc = bot.get_slot_allocation(eq)
+        persistence_mode = (
+            "postgres"
+            if getattr(bot, "state_store", None) is not None
+            else "local_persistent"
+            if os.getenv("EFRA_STATE_FILE", "").startswith("/data/")
+            else "local_ephemeral"
+        )
         return {
             "ok": err is None,
             "engine": "halted" if bot.halted else "active",
             "error": err,
             "thread_alive": bool(thread and thread.is_alive()),
             "lease_status": lease_status,
-            "persistence": "postgres" if getattr(bot, "state_store", None) is not None else "local_ephemeral",
+            "persistence": persistence_mode,
             "started_at": started,
             "uptime_s": max(0.0, time.time() - started) if started else 0.0,
             "mode": "paper" if bot.c.paper else "live",
