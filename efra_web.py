@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from efra_bot import Bot, MakerBot, Cfg
+from efra_store import PostgresStore
 
 logging.basicConfig(
     level=getattr(logging, os.getenv("EFRA_LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -32,6 +33,8 @@ _bot: Bot | None = None
 _engine_thread: threading.Thread | None = None
 _engine_error: str | None = None
 _engine_started_at: float | None = None
+_store: PostgresStore | None = None
+_lease_status = "disabled"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -86,16 +89,52 @@ def build_cfg() -> Cfg:
     return c
 
 
+def _lease_guard(bot: Bot, store: PostgresStore) -> None:
+    global _lease_status, _engine_error
+    while not bot.halted:
+        time.sleep(5)
+        if not store.lease_alive():
+            log.critical("execution lease lost; halting engine fail-closed")
+            _lease_status = "lost"
+            _engine_error = "PostgreSQL execution lease lost"
+            bot.halted = True
+            return
+
+
 def _engine_main() -> None:
-    global _bot, _engine_error, _engine_started_at
+    global _bot, _engine_error, _engine_started_at, _store, _lease_status
+    store = None
     try:
         cfg = build_cfg()
+        db_url = os.getenv("EFRA_DATABASE_URL", "").strip()
+        if db_url:
+            state_key = f"{cfg.exchange}:{cfg.mode}:{'paper' if cfg.paper else 'live'}:{cfg.quote}"
+            store = PostgresStore(db_url, state_key)
+            _store = store
+            store.ensure_schema()
+            _lease_status = "standby"
+            while not store.try_acquire_lease():
+                log.info("execution lease busy | state=%s | waiting as STANDBY", state_key)
+                time.sleep(3)
+            _lease_status = "primary"
+            log.info("execution lease acquired | state=%s | role=PRIMARY", state_key)
+        else:
+            _lease_status = "disabled"
+
         bot_cls = MakerBot if cfg.mode == "maker" else Bot
         log.info(
             "engine boot | exchange=%s mode=%s capital_mode=%s start_balance=%.2f",
             cfg.exchange, cfg.mode, "PAPER" if cfg.paper else "LIVE", cfg.start_balance,
         )
         bot = bot_cls(cfg)
+        if store is not None:
+            bot.state_store = store
+            threading.Thread(
+                target=_lease_guard,
+                args=(bot, store),
+                name="efra-execution-lease-guard",
+                daemon=True,
+            ).start()
         log.info(
             "engine constructed | exchange=%s websocket=%s markets=%d",
             bot.c.exchange, bool(bot.ws_engine), len(getattr(bot.ex, "markets", {}) or {}),
@@ -109,6 +148,9 @@ def _engine_main() -> None:
         log.exception("EFRA engine stopped")
         with _state_lock:
             _engine_error = f"{type(exc).__name__}: {exc}"
+    finally:
+        if store is not None:
+            store.close()
 
 
 def start_engine_once() -> None:
@@ -125,6 +167,15 @@ def start_engine_once() -> None:
 
 
 def _recent_trades(bot: Bot, limit: int = 20) -> list[dict[str, Any]]:
+    store = getattr(bot, "state_store", None)
+    if store is not None:
+        try:
+            rows = store.recent_trades(limit)
+            if rows:
+                return rows
+        except Exception:
+            log.exception("could not read PostgreSQL trade ledger; falling back to CSV")
+
     path = Path(bot.c.log_file)
     if not path.exists():
         return []
@@ -158,6 +209,7 @@ def snapshot() -> dict[str, Any]:
         thread = _engine_thread
         err = _engine_error
         started = _engine_started_at
+        lease_status = _lease_status
 
     if bot is None:
         return {
@@ -165,6 +217,8 @@ def snapshot() -> dict[str, Any]:
             "engine": "starting" if err is None else "failed",
             "error": err,
             "thread_alive": bool(thread and thread.is_alive()),
+            "lease_status": lease_status,
+            "persistence": "postgres" if _store is not None else "local_ephemeral",
         }
 
     try:
@@ -248,6 +302,8 @@ def snapshot() -> dict[str, Any]:
             "engine": "halted" if bot.halted else "active",
             "error": err,
             "thread_alive": bool(thread and thread.is_alive()),
+            "lease_status": lease_status,
+            "persistence": "postgres" if getattr(bot, "state_store", None) is not None else "local_ephemeral",
             "started_at": started,
             "uptime_s": max(0.0, time.time() - started) if started else 0.0,
             "mode": "paper" if bot.c.paper else "live",
@@ -336,7 +392,7 @@ async function tick(){
  try{
   const s=await fetch('/api/status',{cache:'no-store'}).then(r=>r.json());
   $('engine').textContent=(s.engine||'unknown').toUpperCase();$('engine').className='badge '+(s.engine==='active'?'good':s.engine==='starting'?'warn':'bad');
-  $('statusline').innerHTML=['Mode '+String(s.mode||'—').toUpperCase(),'Exchange '+String(s.exchange||'—').toUpperCase(),'Execution '+String(s.execution||'—').toUpperCase(),'Feed '+String(s.feed||'—').toUpperCase(),'Thread '+(s.thread_alive?'ALIVE':'DOWN')].map(x=>'<span class="pill">'+x+'</span>').join('');
+  $('statusline').innerHTML=['Mode '+String(s.mode||'—').toUpperCase(),'Exchange '+String(s.exchange||'—').toUpperCase(),'Execution '+String(s.execution||'—').toUpperCase(),'Feed '+String(s.feed||'—').toUpperCase(),'Thread '+(s.thread_alive?'ALIVE':'DOWN'),'Lease '+String(s.lease_status||'—').toUpperCase(),'State '+String(s.persistence||'—').toUpperCase()].map(x=>'<span class="pill">'+x+'</span>').join('');
   $('metrics').innerHTML=card('Equity','$'+n(s.equity),pc(s.total_pnl))+card('Total P&L',(s.total_pnl>=0?'+':'')+'$'+n(s.total_pnl)+' · '+n(s.total_pnl_pct)+'%',pc(s.total_pnl))+card('Today',(s.day_pnl>=0?'+':'')+'$'+n(s.day_pnl)+' · '+n(s.day_pnl_pct)+'%',pc(s.day_pnl))+card('Closed',String(s.trades||0)+' · '+String(s.wins||0)+'W')+card('Win Rate',n(s.win_rate,1)+'%')+card('Drawdown',n(s.drawdown_pct,2)+'%',s.drawdown_pct>0?'warn':'good');
   const pos=[...(s.positions||[])].map(p=>'<tr><td>'+p.symbol+'</td><td>'+n(p.entry,6)+'</td><td>'+n(p.current,6)+'</td><td class="'+pc(p.ret_bps)+'">'+n(p.ret_bps,1)+' bp</td><td class="'+pc(p.pnl_quote)+'">'+n(p.pnl_quote,4)+'</td><td>'+n(p.peak_ret_bps,1)+' bp</td><td>'+(p.trailing_active?'TRAIL '+n(p.stop_bps,1):p.be_locked?'BE '+n(p.stop_bps,1):'SL '+n(p.stop_bps,1))+'</td></tr>');
   const pend=[...(s.pending||[])].map(p=>'<tr><td>'+p.symbol+' · PENDING</td><td>'+n(p.price,6)+'</td><td>—</td><td>—</td><td>—</td><td>—</td><td>'+n(p.age_s,1)+'s</td></tr>');
