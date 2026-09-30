@@ -497,18 +497,23 @@ app.add_middleware(
 )
 
 
-@app.get("/")
-def dashboard() -> RedirectResponse:
-    terminal_url = os.getenv(
-        "EFRA_TERMINAL_URL",
-        "https://efra-microstructure-paper-live.onrender.com",
-    )
-    return RedirectResponse(terminal_url, status_code=307)
+@app.get("/", response_class=HTMLResponse)
+def dashboard() -> str:
+    return DASHBOARD
 
 
 @app.get("/native", response_class=HTMLResponse)
 def native_dashboard() -> str:
     return DASHBOARD
+
+
+@app.get("/terminal")
+def legacy_terminal() -> RedirectResponse:
+    terminal_url = os.getenv(
+        "EFRA_TERMINAL_URL",
+        "https://efra-microstructure-paper-live.onrender.com",
+    )
+    return RedirectResponse(terminal_url, status_code=307)
 
 
 @app.get("/health")
