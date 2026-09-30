@@ -428,6 +428,214 @@ def snapshot() -> dict[str, Any]:
         }
 
 
+
+LEGACY_DASHBOARD = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EFRA Ultra-Precision Sniper v2</title>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#050608;--panel:#07090d;--panel2:#0a0d12;--line:#1a1f28;
+  --text:#f3f5f7;--muted:#8792a3;--green:#38d39f;--red:#ff696f;
+  --amber:#e7b85c;--blue:#9db8ff;
+}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+body{min-height:100vh}.mono{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
+.shell{min-height:100vh;background:linear-gradient(180deg,#050608 0%,#06080b 100%)}
+header{padding:14px 20px 12px;border-bottom:1px solid var(--line);background:#050608;position:sticky;top:0;z-index:10}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.brand{display:flex;gap:12px}.bar{width:4px;border-radius:4px;background:#d9dde5;height:38px}
+.brand h1{font-size:16px;letter-spacing:.28em;margin:0 0 4px;font-weight:700}.brand p{margin:0;color:var(--muted);font-size:13px}
+.account{text-align:right}.equity{font-size:20px}.pnl{font-size:12px;margin-top:2px}.good{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}
+.badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.badge{border:1px solid var(--line);border-radius:999px;padding:5px 10px;background:#11151c;color:#dbe2ea;font-size:12px}
+.badge.good{background:rgba(56,211,159,.10);color:var(--green)}.badge.muted{color:var(--muted)}
+.grid{display:grid;grid-template-columns:1.1fr 1fr .85fr;min-height:calc(100vh - 108px)}
+.panel{border-right:1px solid var(--line);min-width:0;background:#050608}.panel:last-child{border-right:0}
+.section-head{padding:12px 20px;border-bottom:1px solid var(--line);font-size:14px;font-weight:600}
+.subtle{color:var(--muted);font-size:11px}
+table{width:100%;border-collapse:collapse}.radar th,.radar td{padding:12px 12px;border-bottom:1px solid #11151b;text-align:right;font-size:12px}
+.radar th:first-child,.radar td:first-child{text-align:left;padding-left:20px}.radar th{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.radar tr{cursor:pointer}.radar tr:hover,.radar tr.active{background:#0a0d12}
+.pair{font-size:15px;font-weight:700}.state{font-size:10px;color:var(--muted);margin-top:3px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#5a606a;margin-right:8px}.dot.ready{background:var(--green)}.dot.position{background:var(--amber)}
+.center{padding:0 20px 24px}.pair-top{display:flex;justify-content:space-between;align-items:flex-start;padding:16px 0}.pair-top h2{margin:0;font-size:20px}.price{text-align:right;font-size:20px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.stat{padding:14px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-height:72px}.stat:nth-child(3n){border-right:0}.stat:nth-last-child(-n+3){border-bottom:0}
+.k{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.v{font-size:18px;margin-top:7px}
+.signal{margin-top:18px;border:1px solid #202630;border-radius:14px;padding:16px;background:#080b10}.signal-title{font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.signal p{font-size:12px;color:#9da8b7;line-height:1.65;margin:12px 0 0}
+.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.rule .k{margin-bottom:5px}.rule .v{font-size:15px}
+.book{padding:14px 20px}.book-eq{font-size:42px;font-weight:700;line-height:1.05}.book-pnl{font-size:16px;margin-top:8px}.policy{color:var(--muted);font-size:11px;margin-top:10px}
+.chart{height:150px;margin:10px -6px 0}.chart svg{width:100%;height:100%}
+.book-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:12px}.book-cell{padding:14px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.book-cell:nth-child(2n){border-right:0}.book-cell:nth-last-child(-n+2){border-bottom:0}
+.server-book{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}.server-title{display:flex;justify-content:space-between;align-items:center;font-size:12px;letter-spacing:.08em}
+.position-row{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px}.position-row .row{display:flex;justify-content:space-between;gap:10px}.position-row small{color:var(--muted)}
+.bottom{grid-column:1/-1;border-top:1px solid var(--line);display:grid;grid-template-columns:1.4fr 1fr;background:#050608}
+.ledger,.runtime{padding:14px 20px}.ledger{border-right:1px solid var(--line)}.ledger table th,.ledger table td{padding:9px 8px;border-bottom:1px solid #11151b;font-size:11px;text-align:right}.ledger table th:first-child,.ledger table td:first-child{text-align:left}
+.empty{color:var(--muted);font-size:12px;padding:18px 0}.runtime-list{display:grid;grid-template-columns:1fr 1fr;gap:8px}.runtime-item{border:1px solid var(--line);border-radius:9px;padding:10px}
+@media(max-width:1050px){.grid{grid-template-columns:1fr}.panel{border-right:0;border-bottom:1px solid var(--line)}.bottom{grid-template-columns:1fr}.ledger{border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="shell">
+<header>
+  <div class="top">
+    <div class="brand"><div class="bar"></div><div><h1>EFRA</h1><p>Ultra-Precision Sniper v2</p></div></div>
+    <div class="account"><div id="topEq" class="equity mono">$0.00</div><div id="topPnl" class="pnl mono">—</div></div>
+  </div>
+  <div class="badges" id="badges"></div>
+</header>
+
+<div class="grid">
+  <section class="panel">
+    <div class="section-head">Gate · live microstructure confluence <span id="watched" class="subtle mono"></span></div>
+    <table class="radar">
+      <thead><tr><th>Pair</th><th>Mid</th><th>OBI/CVD</th><th>Mom</th><th>Conf</th><th>Path</th></tr></thead>
+      <tbody id="radarBody"></tbody>
+    </table>
+  </section>
+
+  <section class="panel center">
+    <div class="pair-top">
+      <div><div class="subtle">SNIPER v2 MICROSTRUCTURE</div><h2 id="pairName" class="mono">—</h2></div>
+      <div><div id="pairPrice" class="price mono">—</div><div id="pairMom" class="subtle mono">—</div></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Spread</div><div class="v mono" id="mSpread">—</div></div>
+      <div class="stat"><div class="k">OBI</div><div class="v mono" id="mObi">—</div></div>
+      <div class="stat"><div class="k">CVD</div><div class="v mono" id="mCvd">—</div></div>
+      <div class="stat"><div class="k">Micro skew</div><div class="v mono" id="mSkew">—</div></div>
+      <div class="stat"><div class="k">Confluence</div><div class="v mono" id="mConf">—</div></div>
+      <div class="stat"><div class="k">Net edge</div><div class="v mono" id="mEdge">—</div></div>
+    </div>
+    <div class="signal">
+      <div id="signalTitle" class="signal-title mono">● MONITORING · path —</div>
+      <p>Entry gate combines OBI, CVD, micro-skew, confluence or tape with the cost-aware momentum floor, required path agreement and modeled post-cost edge. BTC regime and redeploy pause remain enforced by the server engine.</p>
+    </div>
+    <div class="rules">
+      <div class="rule"><div class="k">TP</div><div class="v mono" id="rTp">—</div></div>
+      <div class="rule"><div class="k">Hard SL</div><div class="v mono" id="rSl">—</div></div>
+      <div class="rule"><div class="k">Profit lock</div><div class="v mono" id="rBe">—</div></div>
+      <div class="rule"><div class="k">Trail trigger</div><div class="v mono" id="rTrail">—</div></div>
+      <div class="rule"><div class="k">Mom gate</div><div class="v mono" id="rMom">—</div></div>
+      <div class="rule"><div class="k">Path agreement</div><div class="v mono" id="rPaths">—</div></div>
+    </div>
+  </section>
+
+  <aside class="panel book">
+    <div class="section-head" style="padding:0 0 14px;border:0">Gate autonomous book</div>
+    <div id="bookEq" class="book-eq mono">$0.00</div>
+    <div id="bookPnl" class="book-pnl mono">—</div>
+    <div id="policy" class="policy">policy sniper-v2</div>
+    <div class="chart"><svg id="eqChart" viewBox="0 0 400 150" preserveAspectRatio="none"></svg></div>
+    <div class="book-grid">
+      <div class="book-cell"><div class="k">Cash</div><div id="cash" class="v mono">—</div></div>
+      <div class="book-cell"><div class="k">Drawdown</div><div id="dd" class="v mono">—</div></div>
+      <div class="book-cell"><div class="k">Win rate</div><div id="wr" class="v mono">—</div></div>
+      <div class="book-cell"><div class="k">Profit factor</div><div id="pf" class="v mono">—</div></div>
+    </div>
+    <div class="server-book">
+      <div class="server-title"><span>SERVER BOOK</span><span id="bookCounts" class="mono subtle">0 open · 0 resting</span></div>
+      <div id="bookRows"></div>
+    </div>
+  </aside>
+
+  <div class="bottom">
+    <section class="ledger">
+      <div class="section-head" style="padding:0 0 10px;border:0">Realized trade ledger</div>
+      <table><thead><tr><th>Pair</th><th>P&amp;L</th><th>Reason</th><th>Equity</th><th>Tier</th></tr></thead><tbody id="ledgerBody"></tbody></table>
+    </section>
+    <section class="runtime">
+      <div class="section-head" style="padding:0 0 10px;border:0">Runtime / risk</div>
+      <div class="runtime-list" id="runtimeList"></div>
+    </section>
+  </div>
+</div>
+</div>
+<script>
+let state=null, selected=null;
+const $=id=>document.getElementById(id);
+const money=x=>'$'+Number(x||0).toFixed(2);
+const num=(x,d=1)=>Number(x||0).toFixed(d);
+const pct=x=>Number(x||0).toFixed(1)+'%';
+const cls=x=>Number(x||0)>=0?'good':'bad';
+function fmtPx(x){x=Number(x||0);return x>=1000?x.toLocaleString(undefined,{maximumFractionDigits:2}):x>=1?x.toFixed(4):x.toFixed(6)}
+function drawChart(s){
+  const svg=$('eqChart'), trades=s.recent_trades||[], start=Number(s.start_equity||100);
+  const vals=[start]; for(const t of trades) vals.push(Number(t.equity||vals[vals.length-1]));
+  const min=Math.min(...vals), max=Math.max(...vals), span=Math.max(.01,max-min);
+  const pts=vals.map((v,i)=>[(i/(Math.max(1,vals.length-1)))*390+5,140-((v-min)/span)*120]);
+  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  svg.innerHTML='<path d="'+d+'" fill="none" stroke="#38d39f" stroke-width="2"/>';
+}
+function renderPair(){
+  const rows=state?.radar||[]; if(!rows.length)return;
+  if(!selected || !rows.some(r=>r.symbol===selected)) selected=rows[0].symbol;
+  const r=rows.find(x=>x.symbol===selected)||rows[0], c=state.config||{};
+  $('pairName').textContent=(r.symbol||'—').replace('/',' / ');
+  $('pairPrice').textContent=fmtPx(r.mid);
+  $('pairMom').textContent='mom '+(r.momentum_bps>=0?'+':'')+num(r.momentum_bps)+' bps';
+  $('pairMom').className='subtle mono '+cls(r.momentum_bps);
+  $('mSpread').textContent=num(r.spread_bps,2)+' bps';
+  $('mObi').textContent=num((r.obi||0)*100,1)+'%'; $('mObi').className='v mono '+((r.obi||0)>=.5?'good':'bad');
+  $('mCvd').textContent=num((r.cvd||0)*100,1)+'%'; $('mCvd').className='v mono '+((r.cvd||0)>=.5?'good':'bad');
+  $('mSkew').textContent=num(r.micro_skew_bps,2)+' bps'; $('mSkew').className='v mono '+cls(r.micro_skew_bps);
+  $('mConf').textContent=num(r.confluence,1);
+  $('mEdge').textContent=(r.net_edge_bps>=0?'+':'')+num(r.net_edge_bps,1)+' bps'; $('mEdge').className='v mono '+cls(r.net_edge_bps);
+  $('signalTitle').textContent='● '+(r.ready?'SIGNAL READY':String(r.status||'MONITORING').toUpperCase())+' · path '+(r.path||'—');
+  $('signalTitle').className='signal-title mono '+(r.ready?'good':'');
+  $('rTp').textContent=num(c.tp_bps,0)+' bps'; $('rSl').textContent=num(c.sl_bps,0)+' bps'; $('rBe').textContent=num(c.breakeven_bps,0)+' bps';
+  $('rTrail').textContent=num(c.trail_trigger_bps,0)+' / '+num(c.trail_bps,0)+' bps';
+  $('rMom').textContent='max('+num(c.min_mom_bps,1)+', '+num((c.min_impulse_cost_ratio||.3)*100,0)+'% cost)';
+  $('rPaths').textContent=num(c.min_signal_paths||2,0)+' of 3 · conf '+num(c.min_entry_confidence||65,0)+'+';
+}
+function render(){
+  const s=state;if(!s)return;
+  $('topEq').textContent=money(s.equity); $('topPnl').textContent=(s.total_pnl>=0?'+':'')+money(s.total_pnl)+' · '+(s.total_pnl_pct>=0?'+':'')+num(s.total_pnl_pct,2)+'%';
+  $('topPnl').className='pnl mono '+cls(s.total_pnl);
+  $('badges').innerHTML=[
+    '<span class="badge good">● Autonomous Gate · '+String(s.engine||'—')+'</span>',
+    '<span class="badge good">Gate · '+String(s.mode||'—').toUpperCase()+' · '+String(s.feed||'—').toUpperCase()+'</span>',
+    '<span class="badge muted">'+String(s.persistence||'—').replaceAll('_',' ')+'</span>',
+    '<span class="badge muted">sniper-v2</span>'
+  ].join('');
+  const radar=s.radar||[]; $('watched').textContent=radar.length+' watched';
+  $('radarBody').innerHTML=radar.map(r=>'<tr data-sym="'+r.symbol+'" class="'+(r.symbol===selected?'active':'')+'"><td><div class="pair mono"><span class="dot '+(r.status==='position'?'position':r.ready?'ready':'')+'"></span>'+r.symbol.replace('/USDT','/')+'</div><div class="state">'+(r.status||'monitoring')+' · '+num(r.spread_bps,1)+' bps</div></td><td class="mono">'+fmtPx(r.mid)+'</td><td class="mono">'+num((r.obi||0)*100,0)+' / '+num((r.cvd||0)*100,0)+'</td><td class="mono '+cls(r.momentum_bps)+'">'+(r.momentum_bps>=0?'+':'')+num(r.momentum_bps,1)+'</td><td class="mono">'+num(r.confluence,1)+'</td><td class="mono">'+(r.path||'—')+'</td></tr>').join('');
+  document.querySelectorAll('#radarBody tr').forEach(el=>el.onclick=()=>{selected=el.dataset.sym;render();});
+  renderPair();
+  $('bookEq').textContent=money(s.equity); $('bookPnl').textContent=(s.total_pnl>=0?'+':'')+money(s.total_pnl)+' · '+(s.total_pnl_pct>=0?'+':'')+num(s.total_pnl_pct,2)+'%';
+  $('bookPnl').className='book-pnl mono '+cls(s.total_pnl);
+  $('policy').textContent='policy sniper-v2 · '+(s.trades||0)+' closed · '+num(s.average_net_bps_per_trade,2)+' bps/trade';
+  $('cash').textContent=money(s.cash); $('dd').textContent=(s.drawdown_pct>=0?'+':'')+num(s.drawdown_pct,2)+'%'; $('dd').className='v mono '+(s.drawdown_pct>0?'bad':'good');
+  $('wr').textContent=pct(s.win_rate); $('pf').textContent=s.profit_factor==null?'—':num(s.profit_factor,2);
+  drawChart(s);
+  const pos=s.positions||[], pend=s.pending||[]; $('bookCounts').textContent=pos.length+' open · '+pend.length+' resting';
+  const book=[...pos.map(p=>'<div class="position-row"><div class="row"><b class="mono">'+p.symbol+'</b><span class="mono '+cls(p.pnl_quote)+'">'+(p.pnl_quote>=0?'+':'')+money(p.pnl_quote)+'</span></div><small class="mono">'+fmtPx(p.entry)+' → '+fmtPx(p.current)+' · '+num(p.ret_bps,1)+' bps · '+(p.signal_path||'—')+'</small></div>'),
+    ...pend.map(p=>'<div class="position-row"><div class="row"><b class="mono">'+p.symbol+' RESTING</b><span class="mono">'+num(p.age_s,1)+'s</span></div><small class="mono">'+fmtPx(p.price)+' · '+num(p.qty,6)+'</small></div>')];
+  $('bookRows').innerHTML=book.join('')||'<div class="empty">No open autonomous inventory.</div>';
+  const trades=[...(s.recent_trades||[])].reverse();
+  $('ledgerBody').innerHTML=trades.map(t=>'<tr><td class="mono">'+t.symbol+'</td><td class="mono '+cls(t.pnl_quote)+'">'+(t.pnl_quote>=0?'+':'')+money(t.pnl_quote)+'</td><td>'+t.reason+'</td><td class="mono">'+money(t.equity)+'</td><td class="mono">'+t.tier+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">No realized trades yet.</td></tr>';
+  const runtime=[
+    ['Engine',String(s.engine||'—').toUpperCase()],['Thread',s.thread_alive?'ALIVE':'DOWN'],
+    ['Persistence',String(s.persistence||'—').replaceAll('_',' ')],['Lease',String(s.lease_status||'disabled').toUpperCase()],
+    ['Slots',(pos.length+pend.length)+' / '+(s.slots||0)],['Allocation',num(s.slot_allocation_pct,0)+'% / slot'],
+    ['BTC regime',s.btc_regime_safe?'SAFE':'BLOCK'],['BTC momentum',num(s.btc_momentum_bps,1)+' bp']
+  ];
+  $('runtimeList').innerHTML=runtime.map(x=>'<div class="runtime-item"><div class="k">'+x[0]+'</div><div class="v mono">'+x[1]+'</div></div>').join('');
+}
+async function tick(){
+  try{const r=await fetch('/api/status',{cache:'no-store'});state=await r.json();render();}
+  catch(e){$('badges').innerHTML='<span class="badge bad">Server telemetry unavailable</span>';}
+}
+tick();setInterval(tick,1500);
+</script>
+</body>
+</html>"""
+
+
 DASHBOARD = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -499,7 +707,7 @@ app.add_middleware(
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
-    return DASHBOARD
+    return LEGACY_DASHBOARD
 
 
 @app.get("/native", response_class=HTMLResponse)
