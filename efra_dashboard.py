@@ -159,8 +159,11 @@ class EfraDashboard:
         watch_table.add_column("Spread", justify="right")
         watch_table.add_column("OBI (Depth)", justify="right")
         watch_table.add_column("CVD (Tape)", justify="right")
+        watch_table.add_column("µSkew", justify="right")
         watch_table.add_column("Mom", justify="right")
         watch_table.add_column("Confluence", justify="center")
+        watch_table.add_column("Net Edge", justify="right")
+        watch_table.add_column("Path", justify="center")
         watch_table.add_column("Status", justify="left")
 
         watched = getattr(b, "watch", [])
@@ -179,7 +182,8 @@ class EfraDashboard:
                 # Color coding
                 imb_str = f"[green]{imb*100:.1f}%[/]" if imb >= c.imbalance_entry else f"[dim]{imb*100:.1f}%[/]"
                 cvd_str = f"[green]{cvd*100:.1f}%[/]" if cvd >= c.min_cvd else f"[dim]{cvd*100:.1f}%[/]"
-                mom_str = f"[{'green' if mom >= c.min_mom_bps else 'dim'}]{mom:+.1f} bps[/]"
+                mom_str = f"[{'green' if momentum_ok else 'dim'}]{mom:+.1f} bps[/]"
+                skew_str = f"[{'green' if micro_skew >= 0.8 else 'dim'}]{micro_skew:+.2f} bps[/]"
                 
                 conf_color = "bold green" if conf >= c.min_confluence else "yellow" if conf >= 15 else "dim"
                 conf_bar = f"[{conf_color}]{conf:.1f}/100[/]"
@@ -191,6 +195,14 @@ class EfraDashboard:
                 sig_conf = (conf >= c.min_confluence and imb >= 0.62 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
                 sig_tape = (cvd >= 0.72 and imb >= 0.60 and micro_skew >= 0.8 and mom >= c.min_mom_bps)
                 ready = momentum_ok and (sig_obi or sig_conf or sig_tape) and (net_edge >= c.min_net_edge_bps)
+                pathways = "+".join([
+                    label for label, passed in (
+                        ("OBI", sig_obi),
+                        ("CONF", sig_conf),
+                        ("TAPE", sig_tape),
+                    ) if passed
+                ]) or "—"
+                edge_str = f"[{'green' if net_edge >= c.min_net_edge_bps else 'red'}]{net_edge:+.1f} bps[/]"
 
                 status = "[dim]Monitoring[/]"
                 if sym in b.pos:
@@ -206,14 +218,17 @@ class EfraDashboard:
                     f"{spread:.1f} bps",
                     imb_str,
                     cvd_str,
+                    skew_str,
                     mom_str,
                     conf_bar,
+                    edge_str,
+                    pathways,
                     status,
                 )
             else:
-                watch_table.add_row(sym, "-", "-", "-", "-", "-", "-", "[dim]Awaiting Feed[/]")
+                watch_table.add_row(sym, "-", "-", "-", "-", "-", "-", "-", "-", "-", "[dim]Awaiting Feed[/]")
 
-        layout["watchlist"].update(Panel(watch_table, title="Real-Time Alpha Confluence Radar", style="green"))
+        layout["watchlist"].update(Panel(watch_table, title="Live Alpha Confluence Radar — Exact Engine Gates", style="green"))
 
         # Footer
         footer_text = Text.from_markup(
