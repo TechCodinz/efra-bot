@@ -15,6 +15,27 @@ done
 
 mkdir -p "$(dirname "$SRC")" "$STACK" "$(dirname "$ENV")" "$STATE"
 
+PORT_FILE="$STATE/host-port"
+if [ -s "$PORT_FILE" ]; then
+  EFRA_HOST_PORT="$(tr -dc '0-9' < "$PORT_FILE")"
+else
+  EFRA_HOST_PORT=""
+  for candidate in 18085 18086 18087 18088 18089 18090 18185 18186; do
+    if ! ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${candidate}$"; then
+      EFRA_HOST_PORT="$candidate"
+      printf '%s\n' "$EFRA_HOST_PORT" > "$PORT_FILE"
+      break
+    fi
+  done
+fi
+
+if ! [[ "$EFRA_HOST_PORT" =~ ^[0-9]+$ ]]; then
+  echo "ABORT: could not select a free EFRA host port"
+  exit 1
+fi
+export EFRA_HOST_PORT
+echo "EFRA host port: $EFRA_HOST_PORT"
+
 if [ -d "$SRC/.git" ]; then
   git -C "$SRC" fetch origin master
   git -C "$SRC" checkout master
@@ -61,7 +82,7 @@ docker compose -p efra-sniper-v2 -f compose.yml up -d --build --remove-orphans
 echo
 echo "===== WAITING FOR LOCAL HEALTH ====="
 for i in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:18085/health >/tmp/efra-health.json 2>/dev/null; then
+  if curl -fsS http://127.0.0.1:$EFRA_HOST_PORT/health >/tmp/efra-health.json 2>/dev/null; then
     cat /tmp/efra-health.json
     echo
     break
@@ -69,7 +90,7 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-if ! curl -fsS http://127.0.0.1:18085/health >/dev/null; then
+if ! curl -fsS http://127.0.0.1:$EFRA_HOST_PORT/health >/dev/null; then
   echo "ABORT: EFRA did not become healthy"
   docker logs --tail 100 efra-sniper-v2 || true
   exit 1
@@ -91,7 +112,7 @@ text = path.read_text()
 block = f"""
 {begin}
 {host} {{
-    reverse_proxy 127.0.0.1:18085
+    reverse_proxy 127.0.0.1:$EFRA_HOST_PORT
 }}
 {end}
 """
