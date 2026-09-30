@@ -19,6 +19,7 @@ jobs:
           python -m py_compile \
             efra_bot.py \
             efra_web.py \
+            efra_store.py \
             efra_dashboard.py \
             efra_stream.py \
             efra_report.py \
