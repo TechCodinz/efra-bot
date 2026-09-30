@@ -79,6 +79,9 @@ def build_cfg() -> Cfg:
     c.imbalance_entry = _env_float("EFRA_IMBALANCE_ENTRY", c.imbalance_entry)
     c.min_mom_bps = _env_float("EFRA_MIN_MOM_BPS", c.min_mom_bps)
     c.max_mom_bps = _env_float("EFRA_MAX_MOM_BPS", c.max_mom_bps)
+    c.min_impulse_cost_ratio = _env_float("EFRA_MIN_IMPULSE_COST_RATIO", c.min_impulse_cost_ratio)
+    c.min_entry_confidence = _env_float("EFRA_MIN_ENTRY_CONFIDENCE", c.min_entry_confidence)
+    c.min_signal_paths = _env_int("EFRA_MIN_SIGNAL_PATHS", c.min_signal_paths)
     c.inter_trade_pause_s = _env_float("EFRA_INTER_TRADE_PAUSE_S", c.inter_trade_pause_s)
     c.position_frac = _env_float("EFRA_POSITION_FRAC", c.position_frac)
     c.daily_loss_limit_frac = _env_float("EFRA_DAILY_LOSS_LIMIT_FRAC", c.daily_loss_limit_frac)
@@ -248,6 +251,10 @@ def snapshot() -> dict[str, Any]:
                 "be_locked": bool(p.get("be_locked")),
                 "trailing_active": bool(p.get("trailing_active")),
                 "age_s": max(0.0, time.time() - float(p.get("ts", time.time()))),
+                "signal_path": p.get("signal_path", "unknown"),
+                "entry_mom_bps": float(p.get("entry_mom_bps", 0.0)),
+                "entry_confidence": float(p.get("entry_confidence", 0.0)),
+                "entry_cost_bps": float(p.get("entry_cost_bps", 0.0)),
             })
 
         pending_map = getattr(bot, "pending", {}) or {}
@@ -362,6 +369,9 @@ def snapshot() -> dict[str, Any]:
                 "min_cvd": bot.c.min_cvd,
                 "min_mom_bps": bot.c.min_mom_bps,
                 "max_mom_bps": bot.c.max_mom_bps,
+                "min_impulse_cost_ratio": bot.c.min_impulse_cost_ratio,
+                "min_entry_confidence": bot.c.min_entry_confidence,
+                "min_signal_paths": bot.c.min_signal_paths,
                 "daily_loss_limit_pct": bot.c.daily_loss_limit_frac * 100.0,
                 "loop_s": bot.c.loop_s,
             },
