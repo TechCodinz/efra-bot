@@ -1,18 +1,18 @@
 @echo off
-title EFRA MAKER - Gate.io Zero-Taker-Fee Compounding Engine
+title EFRA MAKER v2 - Gate.io Post-Only Compounding Engine
 cd /d "%~dp0"
 cls
 echo =======================================================================
-echo     LAUNCHING GATE.IO MAKER MODE (ZERO TAKER FEES + 80X COMPOUNDING)
+echo     LAUNCHING EFRA MAKER v2 - PASSIVE POST-ONLY EXECUTION
 echo =======================================================================
 echo.
 echo Exchange:   Gate.io (2,067 spot pairs)
 echo Mode:       MAKER (Passive Post-Only Limit Orders at the Bid)
-echo Fee Hurdle: 0 - 15 bps (SAVES 10-15 bps spread + Bypasses 42 bps taker fee)
-echo Compounding: Dynamic 80%% allocation scaling up to 80x ($8,000+ equity)
+echo Execution:  Post-only entry; maker fee schedule is read from the exchange when available
+echo Compounding: +5%% tier steps; 2-5 dynamic slots with loss-streak defensive scaling
 echo.
 echo Initializing order book streams...
-python efra_bot.py --exchange gateio --mode maker --paper --start-balance 100.0 --dashboard
+python efra_bot.py --exchange gateio --mode maker --paper --start-balance 100.0 --tp-bps 200 --sl-bps 40 --breakeven-bps 80 --trail-trigger-bps 100 --trail-bps 30 --min-confluence 55 --inter-trade-pause-s 8 --position-frac 0.40 --daily-loss-limit-frac 0.08 --dashboard
 
 echo.
 echo =======================================================================
