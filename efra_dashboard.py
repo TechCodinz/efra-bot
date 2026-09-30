@@ -5,6 +5,7 @@ Uses 'rich' for a high-performance visual display of telemetry,
 order books, signal confluence, active positions, and compounding progress.
 """
 
+import csv
 import time
 from rich.console import Console
 from rich.table import Table
@@ -43,6 +44,12 @@ class EfraDashboard:
         macro_safe = getattr(b, "last_macro_safe", True)
         btc_mom = getattr(b, "last_btc_mom", 0.0)
         pause_remaining = getattr(b, "last_inter_trade_pause_remaining", 0.0)
+        recent_trades = []
+        try:
+            with open(c.log_file, "r", encoding="utf-8", newline="") as trade_file:
+                recent_trades = list(csv.DictReader(trade_file))[-6:]
+        except (OSError, csv.Error):
+            recent_trades = []
 
         # Tier & Compounding calculations
         tier = getattr(b, "compound_tier", 1)
@@ -58,6 +65,7 @@ class EfraDashboard:
             Layout(name="risk", size=4),
             Layout(name="positions", size=7),
             Layout(name="watchlist", size=10),
+            Layout(name="trades", size=7),
             Layout(name="footer", size=3),
         )
 
@@ -238,6 +246,40 @@ class EfraDashboard:
                 watch_table.add_row(sym, "-", "-", "-", "-", "-", "-", "-", "-", "-", "[dim]Awaiting Feed[/]")
 
         layout["watchlist"].update(Panel(watch_table, title="Live Alpha Confluence Radar — Exact Engine Gates", style="green"))
+
+        # Realized ledger — reads the same CSV written by Bot.close().
+        trade_table = Table(expand=True, box=None)
+        trade_table.add_column("Time")
+        trade_table.add_column("Symbol", style="bold")
+        trade_table.add_column("Entry", justify="right")
+        trade_table.add_column("Exit", justify="right")
+        trade_table.add_column("P&L", justify="right")
+        trade_table.add_column("Reason")
+        trade_table.add_column("Equity", justify="right")
+        trade_table.add_column("Tier", justify="right")
+        if recent_trades:
+            for row in reversed(recent_trades):
+                try:
+                    trade_ts = time.strftime("%H:%M:%S", time.localtime(float(row.get("ts", 0) or 0)))
+                    trade_pnl = float(row.get("pnl_quote", 0) or 0)
+                    trade_color = "green" if trade_pnl >= 0 else "red"
+                    trade_table.add_row(
+                        trade_ts,
+                        row.get("symbol", ""),
+                        f"{float(row.get('entry', 0) or 0):.6g}",
+                        f"{float(row.get('exit', 0) or 0):.6g}",
+                        f"[{trade_color}]{trade_pnl:+.4f}[/]",
+                        row.get("reason", ""),
+                        f"{float(row.get('equity', 0) or 0):.2f}",
+                        row.get("tier", ""),
+                    )
+                except (TypeError, ValueError):
+                    continue
+        else:
+            trade_table.add_row("[dim]No completed trades in this session log[/]", "", "", "", "", "", "", "")
+        layout["trades"].update(
+            Panel(trade_table, title="Realized Trade Ledger — Bot.close() Source", style="blue")
+        )
 
         # Footer
         footer_text = Text.from_markup(
