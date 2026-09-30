@@ -179,7 +179,8 @@ class EfraDashboard:
                 micro_skew = bk.get("micro_skew", 0.0)
                 mid = bk.get("mid", 0.0)
 
-                # Color coding
+                # Color coding + exact execution gate parity
+                momentum_ok = c.min_mom_bps <= mom <= getattr(c, "max_mom_bps", 25.0)
                 imb_str = f"[green]{imb*100:.1f}%[/]" if imb >= c.imbalance_entry else f"[dim]{imb*100:.1f}%[/]"
                 cvd_str = f"[green]{cvd*100:.1f}%[/]" if cvd >= c.min_cvd else f"[dim]{cvd*100:.1f}%[/]"
                 mom_str = f"[{'green' if momentum_ok else 'dim'}]{mom:+.1f} bps[/]"
@@ -190,7 +191,6 @@ class EfraDashboard:
 
                 cost = 2 * (c.fee_bps + c.slippage_bps) + spread
                 net_edge = c.tp_bps - cost
-                momentum_ok = c.min_mom_bps <= mom <= getattr(c, "max_mom_bps", 25.0)
                 sig_obi = (imb >= c.imbalance_entry and micro_skew >= 0.8 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
                 sig_conf = (conf >= c.min_confluence and imb >= 0.62 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
                 sig_tape = (cvd >= 0.72 and imb >= 0.60 and micro_skew >= 0.8 and mom >= c.min_mom_bps)
