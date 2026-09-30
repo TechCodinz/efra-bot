@@ -52,7 +52,8 @@ class EfraDashboard:
         mode_str = "[bold green]PAPER MODE[/]" if c.paper else "[bold red]LIVE TRADING[/]"
         ws_str = "[bold cyan]WEBSOCKET (ccxt.pro)[/]" if getattr(b, "ws_engine", None) else "[yellow]REST POLLING[/]"
         header_text = Text.from_markup(
-            f" [bold white]EFRA BOT v2.0[/] | {mode_str} | Exchange: [bold yellow]{c.exchange.upper()}[/] | Feed: {ws_str} | Quote: [bold]{c.quote}[/]"
+            f" [bold white]EFRA ULTRA-PRECISION SNIPER v2[/] | {mode_str} | Exchange: [bold yellow]{c.exchange.upper()}[/] | "
+            f"Execution: [bold cyan]{c.mode.upper()}[/] | Feed: {ws_str} | Quote: [bold]{c.quote}[/]"
         )
         layout["header"].update(Panel(header_text, style="blue"))
 
@@ -71,7 +72,7 @@ class EfraDashboard:
             f" [bold]P&L:[/] [{pnl_color}]{pnl_tot:+.2f} ({pnl_pct:+.2f}%)[/]",
             f" [bold]Trades:[/] {b.n_trades} ([green]{b.n_wins}W[/]/[red]{b.n_trades - b.n_wins}L[/])",
             f" [bold]Win Rate:[/] [{pnl_color}]{win_rate:.1f}%[/]",
-            f" [bold]Compounding:[/] Tier {tier} [cyan]({tier_prog:.0f}% to next +10%)[/]",
+            f" [bold]Compounding:[/] Tier {tier} [cyan]({tier_prog:.0f}% to next +{c.compound_step*100:.0f}%)[/]",
         )
         layout["metrics"].update(Panel(metrics_table, title="Account & Performance Telemetry", style="cyan"))
 
@@ -148,10 +149,11 @@ class EfraDashboard:
 
                 cost = 2 * (c.fee_bps + c.slippage_bps) + spread
                 net_edge = c.tp_bps - cost
-                sig_obi = (imb >= c.imbalance_entry and micro_skew >= 0.5 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
-                sig_conf = (conf >= c.min_confluence and imb >= 0.60 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
-                sig_tape = (cvd >= 0.70 and imb >= 0.58 and micro_skew >= 0.5 and mom >= c.min_mom_bps)
-                ready = (sig_obi or sig_conf or sig_tape) and (net_edge >= c.min_net_edge_bps)
+                momentum_ok = c.min_mom_bps <= mom <= getattr(c, "max_mom_bps", 25.0)
+                sig_obi = (imb >= c.imbalance_entry and micro_skew >= 0.8 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
+                sig_conf = (conf >= c.min_confluence and imb >= 0.62 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
+                sig_tape = (cvd >= 0.72 and imb >= 0.60 and micro_skew >= 0.8 and mom >= c.min_mom_bps)
+                ready = momentum_ok and (sig_obi or sig_conf or sig_tape) and (net_edge >= c.min_net_edge_bps)
 
                 status = "[dim]Monitoring[/]"
                 if sym in b.pos:
@@ -178,7 +180,11 @@ class EfraDashboard:
 
         # Footer
         footer_text = Text.from_markup(
-            f" [dim]Loop Interval: {c.loop_s:.1f}s | Min Net Edge: {c.min_net_edge_bps:.1f} bps | Trailing Cushion: {c.trail_bps:.0f} bps | Press Ctrl+C to Stop[/]"
+            f" [dim]TP {c.tp_bps:.0f}bps | SL {c.sl_bps:.0f}bps | BE {c.breakeven_bps:.0f}bps | "
+            f"Trail trigger/cushion {c.trail_trigger_bps:.0f}/{c.trail_bps:.0f}bps | Conf ≥{c.min_confluence:.0f} | "
+            f"OBI ≥{c.imbalance_entry:.2f} | CVD ≥{c.min_cvd:.2f} | µSkew ≥0.8bps | "
+            f"Mom {c.min_mom_bps:.1f}..{getattr(c, 'max_mom_bps', 25.0):.1f}bps | Daily guard {c.daily_loss_limit_frac*100:.0f}% | "
+            f"Loop {c.loop_s:.1f}s | Ctrl+C Stop[/]"
         )
         layout["footer"].update(Panel(footer_text, style="dim"))
 
