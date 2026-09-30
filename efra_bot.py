@@ -148,6 +148,9 @@ class Bot:
         self.last_tier_equity = cfg.start_balance
         self.high_water_mark = cfg.start_balance
         self.last_close_ts = 0.0
+        self.last_macro_safe = True
+        self.last_btc_mom = 0.0
+        self.last_inter_trade_pause_remaining = 0.0
 
         # Isolated state & log files per exchange and execution mode to prevent cross-process corruption
         if self.c.state_file == "efra_state.json":
@@ -758,11 +761,16 @@ class Bot:
 
         # Alpha Confluence Entries (with inter_trade_pause_s to prevent runaway fee churn)
         inter_pause = getattr(c, "inter_trade_pause_s", 45.0)
-        if now - getattr(self, "last_close_ts", 0.0) < inter_pause:
+        self.last_inter_trade_pause_remaining = max(
+            0.0, inter_pause - (now - getattr(self, "last_close_ts", 0.0))
+        )
+        if self.last_inter_trade_pause_remaining > 0:
             return
 
         # Check macro BTC regime before considering any altcoin long
         macro_safe, btc_mom = self.check_btc_regime()
+        self.last_macro_safe = macro_safe
+        self.last_btc_mom = btc_mom
         if not macro_safe:
             return
 
