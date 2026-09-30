@@ -10,14 +10,16 @@ import csv
 import logging
 import os
 import threading
+import urllib.request
+import urllib.error
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from efra_bot import Bot, MakerBot, Cfg
 from efra_store import PostgresStore
@@ -705,9 +707,64 @@ app.add_middleware(
 )
 
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
-    return LEGACY_DASHBOARD
+RENDER_TERMINAL_ORIGIN = "https://efra-microstructure-paper-live.onrender.com"
+VPS_PUBLIC_ORIGIN = "https://efra-sniper-v2.169-58-175-192.nip.io"
+
+def _proxy_terminal_asset(path: str, query: str = "") -> Response:
+    upstream = f"{RENDER_TERMINAL_ORIGIN}/{path.lstrip('/')}"
+    if query:
+        upstream += "?" + query
+    req = urllib.request.Request(
+        upstream,
+        headers={
+            "User-Agent": "EFRA-VPS-UI-Proxy/1.0",
+            "Accept-Encoding": "identity",
+            "Accept": "*/*",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            body = resp.read()
+            content_type = resp.headers.get("content-type", "application/octet-stream")
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        content_type = exc.headers.get("content-type", "text/plain")
+        status = exc.code
+    except Exception as exc:
+        return Response(
+            content=f"EFRA terminal upstream unavailable: {type(exc).__name__}: {exc}",
+            status_code=502,
+            media_type="text/plain",
+        )
+
+    textual = (
+        "text/" in content_type
+        or "javascript" in content_type
+        or "json" in content_type
+        or "xml" in content_type
+    )
+    if textual:
+        text = body.decode("utf-8", errors="replace")
+        # Preserve the exact existing EFRA terminal, but make its Sniper v2
+        # telemetry authoritative from this continuously running VPS.
+        text = text.replace(
+            "https://efra-sniper-v2.onrender.com",
+            VPS_PUBLIC_ORIGIN,
+        )
+        body = text.encode("utf-8")
+
+    return Response(
+        content=body,
+        status_code=status,
+        headers={"cache-control": "no-store"},
+        media_type=content_type.split(";", 1)[0],
+    )
+
+
+@app.get("/")
+def dashboard(request: Request) -> Response:
+    return _proxy_terminal_asset("", request.url.query)
 
 
 @app.get("/native", response_class=HTMLResponse)
@@ -757,3 +814,10 @@ def api_positions() -> dict[str, Any]:
 @app.get("/api/radar")
 def api_radar() -> dict[str, Any]:
     return {"radar": snapshot().get("radar", [])}
+
+
+@app.get("/{path:path}")
+def terminal_assets(path: str, request: Request) -> Response:
+    # Specific local API/health routes above remain authoritative. Everything
+    # else is the already-built EFRA terminal UI and its static assets.
+    return _proxy_terminal_asset(path, request.url.query)
