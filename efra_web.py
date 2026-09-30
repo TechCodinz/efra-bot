@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from efra_bot import Bot, MakerBot, Cfg
 from efra_store import PostgresStore
@@ -455,8 +455,17 @@ app.add_middleware(
 )
 
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
+@app.get("/")
+def dashboard() -> RedirectResponse:
+    terminal_url = os.getenv(
+        "EFRA_TERMINAL_URL",
+        "https://efra-microstructure-paper-live.onrender.com",
+    )
+    return RedirectResponse(terminal_url, status_code=307)
+
+
+@app.get("/native", response_class=HTMLResponse)
+def native_dashboard() -> str:
     return DASHBOARD
 
 
