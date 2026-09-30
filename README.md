@@ -59,19 +59,20 @@ Filters out fake spoofing walls by requiring multi-factor confluence before any 
 5. **Cost Clearance**: Anticipated edge clears round-trip maker/taker fees + slippage by at least 5.0 bps.
 
 ### 3. Dynamic 3-Stage Profit Lock & Trailing Exits
-Traditional bots use static take-profits and get stopped out by noise. Efra v2.0 uses dynamic protection:
-- **Stage 1 (Breakeven Ratchet)**: As soon as return reaches $+16\text{ bps}$, the stop loss ratchets up to **Entry + Fees** (+costs), completely eliminating downside risk on the trade.
-- **Stage 2 (Dynamic Trailing Stop)**: When return surpasses $+25\text{ bps}$, an adaptive trailing stop activates, trailing peak gains by $12\text{ bps}$. This allows runners to capture explosive **$+60$ to $+150\text{ bps}$** surges.
-- **Stage 3 (Hard Stop & Safety)**: Initial stop loss is set at $-25\text{ bps}$, with timeout at $90\text{ s}$ and daily loss halt limit ($10\%$).
+The current Ultra-Precision v2 runtime uses asymmetric protection tuned to let strong winners run:
+- **Stage 1 (Breakeven Ratchet)**: once return reaches **+80 bps** (or the actual round-trip cost plus the configured profit buffer, whichever is higher), the stop ratchets above costs.
+- **Stage 2 (Dynamic Trailing Stop)**: once return reaches **+100 bps**, trailing protection follows peak return with a **30 bps** cushion, allowing continuation toward the **+200 bps TP** and beyond when the trail is active.
+- **Stage 3 (Hard Stop & Safety)**: initial stop is **-40 bps**, max hold is **420 seconds**, structural breakdown exits are stricter, and the daily loss halt is **8%**.
 
-### 4. Hyper-Growth Compounding Engine ("+10% or More")
+### 4. Hyper-Growth Compounding Engine
 Built specifically for rapid, disciplined capital scaling:
-- **Auto-Capital Re-Indexing**: Every $+10\%$ increase in total equity (whether from trading profits or added deposits) automatically promotes your account to the next **Compounding Tier** and scales up position sizing.
+- **Auto-Capital Re-Indexing**: every **+5%** increase from the current compounding tier promotes the account to the next tier.
 - **Dynamic Multi-Slot Allocation**:
-  - Capital $<\$50$: 1 high-conviction slot (85% allocation).
-  - Capital $\$50 - \$250$: 2 concurrent slots (45% allocation each).
-  - Capital $>\$250$: 3 diversified slots (30% allocation each).
-- **Anti-Martingale Defensive Shield**: If 3 consecutive losses occur during adverse market regimes, position sizing is automatically reduced by 25% until the next win.
+  - Capital **< $300**: 2 concurrent sniper slots at the configured position fraction (currently 40% each).
+  - Capital **$300 - $1,000**: 3 slots at 30% each.
+  - Capital **$1,000 - $3,000**: 4 slots at 22% each.
+  - Capital **> $3,000**: 5 slots at 18% each.
+- **Anti-Martingale Defensive Shield**: after **2 consecutive losses**, allocation is reduced by **30%** until a winning close resets the streak.
 
 ---
 
@@ -90,7 +91,10 @@ Built specifically for rapid, disciplined capital scaling:
 | `--compound-step` | `0.10` | Percentage equity gain to advance compounding tier (10%) |
 | `--no-ws` | `False` | Disable WebSocket and use REST polling |
 | `--mode` | `taker` | Execution mode: `taker` (IOC market) or `maker` (post-only) |
-| `--tp-bps` | `150.0` | Target take-profit in basis points (+1.50%) |
+| `--tp-bps` | `200.0` | Target take-profit in basis points (+2.00%) |
 | `--sl-bps` | `40.0` | Hard stop-loss in basis points (-0.40%) |
-| `--breakeven-bps` | `55.0` | Profit threshold to ratchet stop to breakeven (+costs + profit) |
-| `--trail-bps` | `25.0` | Trailing stop cushion distance (allows runners to surge) |
+| `--breakeven-bps` | `80.0` | Profit threshold to ratchet stop above round-trip costs |
+| `--trail-trigger-bps` | `100.0` | Profit threshold that activates the trailing stop |
+| `--trail-bps` | `30.0` | Trailing stop cushion distance from peak return |
+| `--compound-step` | `0.05` | Equity growth required to advance the compounding tier (+5%) |
+| `--daily-loss-limit-frac` | `0.08` | Daily equity drawdown that halts and flattens the engine |
