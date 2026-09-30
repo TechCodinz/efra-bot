@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: efra-bot
+    runtime: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python efra_bot.py --exchange gateio --paper --reset --start-balance 100.0 --tp-bps 200.0 --sl-bps 40.0 --breakeven-bps 80.0 --trail-trigger-bps 100.0 --trail-bps 30.0 --min-confluence 55.0 --inter-trade-pause-s 8.0 --position-frac 0.40 --daily-loss-limit-frac 0.08 --watch-n 18 --max-hold-s 420
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PYTHONUNBUFFERED
+        value: "1"

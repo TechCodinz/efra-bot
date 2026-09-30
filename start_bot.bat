@@ -1,0 +1,46 @@
+@echo off
+title EFRA BOT v2.0 - High-Volatility Gate.io Sniper
+cd /d "%~dp0"
+cls
+echo =======================================================================
+echo          EFRA BOT v2.0 - High-Volatility Microstructure Scalper
+echo =======================================================================
+echo.
+echo Select Run Mode:
+echo   [1] Run Gate.io Sniper Breakout Mode (High-Volatility + Asymmetric 3:1 TP) [RECOMMENDED]
+echo   [2] Run Gate.io Maker Mode (ZERO Taker Fees - Spread Arbitrage on Oscillations)
+echo   [3] Run Kraken Mode with Terminal Dashboard
+echo   [4] Run Gate.io Diagnostic (Test latency, fees, and 2,000+ spot pairs)
+echo   [5] Run Performance & Edge Analytics Report
+echo   [6] Reset State and Trade History (Start Clean $100 Session)
+echo   [7] Exit
+echo.
+set choice=1
+set /p choice="Enter choice [1-7] (Press ENTER for default [1]): "
+
+if "%choice%"=="1" (
+    echo Starting Gate.io High-Conviction Sniper Mode...
+    python efra_bot.py --exchange gateio --paper --start-balance 100.0 --dashboard
+) else if "%choice%"=="2" (
+    echo Starting Gate.io Maker Mode...
+    python efra_bot.py --exchange gateio --mode maker --paper --start-balance 100.0 --dashboard
+) else if "%choice%"=="3" (
+    echo Starting Kraken Mode...
+    python efra_bot.py --exchange kraken --paper --start-balance 100.0 --dashboard
+) else if "%choice%"=="4" (
+    echo Starting Gate.io Diagnostic...
+    python efra_bot.py --exchange gateio --diagnostic
+) else if "%choice%"=="5" (
+    python efra_report.py
+) else if "%choice%"=="6" (
+    echo Resetting state and trade logs...
+    python efra_bot.py --exchange gateio --paper --reset --start-balance 100.0
+) else (
+    exit /b
+)
+
+echo.
+echo =======================================================================
+echo Engine process ended. Press any key to close this window.
+echo =======================================================================
+pause >nul
