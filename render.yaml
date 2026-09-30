@@ -1,13 +1,44 @@
 services:
-  - type: worker
-    name: efra-bot
+  - type: web
+    name: efra-sniper-v2
     runtime: python
     region: oregon
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python efra_bot.py --exchange gateio --paper --start-balance 100.0 --tp-bps 200.0 --sl-bps 40.0 --breakeven-bps 80.0 --trail-trigger-bps 100.0 --trail-bps 30.0 --min-confluence 55.0 --inter-trade-pause-s 8.0 --position-frac 0.40 --daily-loss-limit-frac 0.08 --watch-n 18 --max-hold-s 420
+    startCommand: uvicorn efra_web:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: EFRA_EXCHANGE
+        value: gateio
+      - key: EFRA_MODE
+        value: taker
+      - key: EFRA_PAPER
+        value: "true"
+      - key: EFRA_START_BALANCE
+        value: "100.0"
+      - key: EFRA_TP_BPS
+        value: "200.0"
+      - key: EFRA_SL_BPS
+        value: "40.0"
+      - key: EFRA_BREAKEVEN_BPS
+        value: "80.0"
+      - key: EFRA_TRAIL_TRIGGER_BPS
+        value: "100.0"
+      - key: EFRA_TRAIL_BPS
+        value: "30.0"
+      - key: EFRA_MIN_CONFLUENCE
+        value: "55.0"
+      - key: EFRA_INTER_TRADE_PAUSE_S
+        value: "8.0"
+      - key: EFRA_POSITION_FRAC
+        value: "0.40"
+      - key: EFRA_DAILY_LOSS_LIMIT_FRAC
+        value: "0.08"
+      - key: EFRA_WATCH_N
+        value: "18"
+      - key: EFRA_MAX_HOLD_S
+        value: "420"
