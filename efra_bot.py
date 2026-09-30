@@ -94,8 +94,11 @@ class Cfg:
     imbalance_entry: float = 0.68        # bid share of top-5 depth (68% bids - only verified walls)
     min_cvd: float = 0.58               # aggressive buyer ratio - only enter with strong tape
     min_confluence: float = 55.0         # robust composite alpha bar - only top-tier setups
-    min_mom_bps: float = 2.5             # require at least 2.5 bps of positive momentum at entry
-    max_mom_bps: float = 20.0            # never chase exhaustion blow-off tops (tightened)
+    min_mom_bps: float = 2.5             # absolute floor; cost-aware gate below is normally stricter
+    max_mom_bps: float = 20.0            # never chase exhaustion blow-off tops
+    min_impulse_cost_ratio: float = 0.30  # entry impulse must cover >=30% of modeled round-trip cost
+    min_entry_confidence: float = 65.0    # every entry must clear this composite confidence floor
+    min_signal_paths: int = 2             # require agreement from at least two of OBI / CONF / TAPE
     mom_window: int = 8                  # loop ticks of mid-price history
     max_hold_s: int = 420                # 7-minute max hold (gives breakouts room to complete without fee churn)
     cooldown_s: int = 25                 # 25s fast cooldown per pair after exit
@@ -633,12 +636,23 @@ class Bot:
             "stop_bps": -c.sl_bps,
             "be_locked": False,
             "trailing_active": False,
+            "signal_path": s.get("signal_path", "unknown"),
+            "entry_mom_bps": s.get("mom", 0.0),
+            "entry_confidence": s.get("confluence", 0.0),
+            "entry_cost_bps": s.get("entry_cost_bps", 0.0),
+            "entry_min_mom_bps": s.get("entry_min_mom_bps", c.min_mom_bps),
         }
         self._bal_cache = (0.0, None)
         self.save_state()
-        logging.info("BUY  %s @ %.8g | OBI=%.2f CVD=%.2f Mom=%.1fbps Conf=%.1f | Cost=$%.2f",
-                     sym, entry, s.get("imb", 0.5), s.get("cvd_5s", 0.5), s["mom"],
-                     s.get("confluence", 0.0), quote_amt)
+        logging.info(
+            "BUY  %s @ %.8g | Path=%s OBI=%.2f CVD=%.2f Mom=%.1fbps>=%.1f Conf=%.1f Cost=%.1fbps | Size=$%.2f",
+            sym, entry, self.pos[sym].get("signal_path", "unknown"),
+            s.get("imb", 0.5), s.get("cvd_5s", 0.5), s["mom"],
+            self.pos[sym].get("entry_min_mom_bps", c.min_mom_bps),
+            s.get("confluence", 0.0),
+            self.pos[sym].get("entry_cost_bps", 0.0),
+            quote_amt,
+        )
 
     def close(self, sym, s, reason, books):
         c = self.c
@@ -714,9 +728,13 @@ class Bot:
         self.last_close_ts = time.time()
         self.save_state()
         ret_bps = (exit_px - p["entry"]) / p["entry"] * 1e4
-        logging.info("SELL %s @ %.8g | %s | PnL=%+.4f (%+.1fbps) | Eq=$%.2f | WinRate=%.0f%% (%d trades)",
-                     sym, exit_px, reason.upper(), pnl, ret_bps, eq,
-                     100.0 * self.n_wins / self.n_trades, self.n_trades)
+        net_bps = (pnl / p["cost"] * 1e4) if p.get("cost") else 0.0
+        logging.info(
+            "SELL %s @ %.8g | %s | Path=%s | PnL=%+.4f raw=%+.1fbps net=%+.1fbps | Eq=$%.2f | WinRate=%.0f%% (%d trades)",
+            sym, exit_px, reason.upper(), p.get("signal_path", "unknown"),
+            pnl, ret_bps, net_bps, eq,
+            100.0 * self.n_wins / self.n_trades, self.n_trades,
+        )
 
     # ---------- main step ----------
     def step(self):
@@ -846,8 +864,16 @@ class Bot:
             micro_skew = s.get("micro_skew", 0.0)
             conf = s.get("confluence", 0.0)
 
-            # Never buy into negative or below-threshold momentum
-            if mom < c.min_mom_bps:
+            # Gate observed PAPER entries by the economics they actually have to overcome.
+            # Gate's current schedule is ~42 bps round-trip before spread; a 2.5 bps
+            # micro impulse is far too small to justify paying that cost. Scale the
+            # minimum impulse from the modeled round-trip cost, while retaining the
+            # absolute configured floor.
+            cost_aware_min_mom = max(
+                c.min_mom_bps,
+                cost * c.min_impulse_cost_ratio,
+            )
+            if mom < cost_aware_min_mom:
                 continue
 
             # Never chase exhaustion tops (overextended momentum wicks that immediately retrace)
@@ -862,9 +888,21 @@ class Bot:
             # 3. Aggressive buyer surge on trade tape: dominant tape buying with strong book
             sig_tape = (cvd >= 0.72 and imb >= 0.60 and micro_skew >= 0.8 and mom >= c.min_mom_bps)
 
-            if sig_obi or sig_conf or sig_tape:
-                quote_amt = self._quote_free(fresh=not c.paper) * alloc_frac
-                self.open(sym, s, quote_amt)
+            paths = [
+                name
+                for name, passed in (("OBI", sig_obi), ("CONF", sig_conf), ("TAPE", sig_tape))
+                if passed
+            ]
+            if len(paths) < c.min_signal_paths:
+                continue
+            if conf < c.min_entry_confidence:
+                continue
+
+            s["signal_path"] = "+".join(paths)
+            s["entry_cost_bps"] = cost
+            s["entry_min_mom_bps"] = cost_aware_min_mom
+            quote_amt = self._quote_free(fresh=not c.paper) * alloc_frac
+            self.open(sym, s, quote_amt)
 
     def flatten(self, reason):
         for sym in list(self.pos):
