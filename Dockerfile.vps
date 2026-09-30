@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY efra_bot.py efra_stream.py efra_dashboard.py efra_report.py efra_research.py efra_web.py efra_store.py /app/
+
+RUN mkdir -p /data
+
+EXPOSE 8080
+
+CMD ["uvicorn", "efra_web:app", "--host", "0.0.0.0", "--port", "8080"]
