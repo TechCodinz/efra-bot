@@ -24,3 +24,6 @@ jobs:
             efra_stream.py \
             efra_report.py \
             efra_research.py
+      - name: Validate VPS installer
+        run: |
+          bash -n deploy/vps/install.sh
