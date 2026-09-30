@@ -323,32 +323,22 @@ class Bot:
         logging.info("fee schedule: maker %.1fbps / taker %.1fbps", c.maker_fee_bps, c.fee_bps)
 
     # ---------- state & persistence ----------
-    def save_state(self):
-        try:
-            with open(self.c.state_file, "w") as f:
-                json.dump({
-                    "pos": self.pos,
-                    "cash": self.cash,
-                    "n_trades": self.n_trades,
-                    "n_wins": self.n_wins,
-                    "compound_tier": self.compound_tier,
-                    "last_tier_equity": self.last_tier_equity,
-                    "high_water_mark": self.high_water_mark,
-                }, f)
-        except Exception:
-            logging.exception("could not save state")
+    def _state_payload(self):
+        return {
+            "pos": self.pos,
+            "cash": self.cash,
+            "n_trades": self.n_trades,
+            "n_wins": self.n_wins,
+            "loss_streak": self.loss_streak,
+            "compound_tier": self.compound_tier,
+            "last_tier_equity": self.last_tier_equity,
+            "high_water_mark": self.high_water_mark,
+        }
 
-    def recover_state(self):
-        if not os.path.exists(self.c.state_file):
-            return
-        try:
-            with open(self.c.state_file) as f:
-                st = json.load(f)
-        except Exception:
-            logging.warning("state file unreadable, ignoring")
-            return
+    def _apply_state_payload(self, st):
         self.n_trades = st.get("n_trades", 0)
         self.n_wins = st.get("n_wins", 0)
+        self.loss_streak = st.get("loss_streak", 0)
         self.compound_tier = st.get("compound_tier", 1)
         self.last_tier_equity = st.get("last_tier_equity", self.cash)
         self.high_water_mark = st.get("high_water_mark", self.cash)
@@ -359,6 +349,43 @@ class Bot:
                 p["ts"] = time.time()
                 self.pos[sym] = p
                 logging.warning("recovered open position %s qty=%.8g entry=%.8g", sym, p["qty"], p["entry"])
+
+    def save_state(self):
+        payload = self._state_payload()
+        try:
+            with open(self.c.state_file, "w") as f:
+                json.dump(payload, f)
+        except Exception:
+            logging.exception("could not save local state")
+
+        store = getattr(self, "state_store", None)
+        if store is not None:
+            try:
+                store.save_state(payload)
+            except Exception:
+                logging.exception("could not save PostgreSQL state")
+
+    def recover_state(self):
+        store = getattr(self, "state_store", None)
+        if store is not None:
+            try:
+                st = store.load_state()
+                if st:
+                    self._apply_state_payload(st)
+                    logging.info("recovered durable PostgreSQL state")
+                    return
+            except Exception:
+                logging.exception("could not recover PostgreSQL state; falling back to local state")
+
+        if not os.path.exists(self.c.state_file):
+            return
+        try:
+            with open(self.c.state_file) as f:
+                st = json.load(f)
+        except Exception:
+            logging.warning("state file unreadable, ignoring")
+            return
+        self._apply_state_payload(st)
 
     # ---------- helpers ----------
     def _init_log(self):
@@ -658,11 +685,30 @@ class Bot:
         eq = self.equity(books)
         self.check_compounding(eq)
 
+        trade_row = {
+            "ts": int(time.time()),
+            "symbol": sym,
+            "entry": p["entry"],
+            "exit": exit_px,
+            "qty": qty,
+            "pnl_quote": round(pnl, 6),
+            "reason": reason,
+            "equity": round(eq, 4),
+            "tier": self.compound_tier,
+        }
         with open(c.log_file, "a", newline="") as f:
             csv.writer(f).writerow([
-                int(time.time()), sym, p["entry"], exit_px, qty,
-                round(pnl, 6), reason, round(eq, 4), self.compound_tier
+                trade_row["ts"], trade_row["symbol"], trade_row["entry"],
+                trade_row["exit"], trade_row["qty"], trade_row["pnl_quote"],
+                trade_row["reason"], trade_row["equity"], trade_row["tier"]
             ])
+
+        store = getattr(self, "state_store", None)
+        if store is not None:
+            try:
+                store.save_trade(trade_row)
+            except Exception:
+                logging.exception("could not save PostgreSQL trade ledger")
 
         self.cool[sym] = time.time() + c.cooldown_s
         self.last_close_ts = time.time()
@@ -873,30 +919,16 @@ class MakerBot(Bot):
     def equity(self, books):
         return super().equity(books) + sum(pd["quote"] for pd in self.pending.values())
 
-    def save_state(self):
-        try:
-            with open(self.c.state_file, "w") as f:
-                json.dump({
-                    "pos": self.pos,
-                    "pending": self.pending,
-                    "cash": self.cash,
-                    "n_trades": self.n_trades,
-                    "n_wins": self.n_wins,
-                    "compound_tier": self.compound_tier,
-                    "last_tier_equity": self.last_tier_equity,
-                }, f)
-        except Exception:
-            logging.exception("could not save maker state")
+    def _state_payload(self):
+        payload = super()._state_payload()
+        payload["pending"] = self.pending
+        return payload
 
-    def recover_state(self):
-        super().recover_state()
-        try:
-            with open(self.c.state_file) as f:
-                for sym, pd in (json.load(f).get("pending") or {}).items():
-                    if sym in self.ex.markets:
-                        self.pending[sym] = pd
-        except Exception:
-            pass
+    def _apply_state_payload(self, st):
+        super()._apply_state_payload(st)
+        for sym, pd in (st.get("pending") or {}).items():
+            if sym in self.ex.markets:
+                self.pending[sym] = pd
 
     def preflight(self):
         super().preflight()
