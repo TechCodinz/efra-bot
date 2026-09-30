@@ -9,7 +9,7 @@ REPO=https://github.com/TechCodinz/efra-bot.git
 
 echo "===== EFRA SNIPER v2 — VPS PAPER INSTALL ====="
 
-for cmd in git docker curl python3; do
+for cmd in git docker curl python3 ss; do
   command -v "$cmd" >/dev/null || { echo "ABORT: missing $cmd"; exit 1; }
 done
 
@@ -101,18 +101,19 @@ if [ -n "$PUBLIC_IP" ] && command -v caddy >/dev/null && [ -f /etc/caddy/Caddyfi
   HOST="efra-sniper-v2.$(printf '%s' "$PUBLIC_IP" | tr . -).nip.io"
   BEGIN="# BEGIN EFRA-SNIPER-V2"
   END="# END EFRA-SNIPER-V2"
-  python3 - "$HOST" <<'PY'
+  python3 - "$HOST" "$EFRA_HOST_PORT" <<'PY'
 from pathlib import Path
 import sys
 path = Path("/etc/caddy/Caddyfile")
 host = sys.argv[1]
+port = sys.argv[2]
 begin = "# BEGIN EFRA-SNIPER-V2"
 end = "# END EFRA-SNIPER-V2"
 text = path.read_text()
 block = f"""
 {begin}
 {host} {{
-    reverse_proxy 127.0.0.1:$EFRA_HOST_PORT
+    reverse_proxy 127.0.0.1:{port}
 }}
 {end}
 """
@@ -132,7 +133,7 @@ PY
 else
   echo
   echo "Caddy/public host was not auto-configured."
-  echo "Local API is healthy on 127.0.0.1:18085."
+  echo "Local API is healthy on 127.0.0.1:$EFRA_HOST_PORT."
 fi
 
 echo
