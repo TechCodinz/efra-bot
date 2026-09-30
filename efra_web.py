@@ -66,6 +66,8 @@ def build_cfg() -> Cfg:
     c.quote = os.getenv("EFRA_QUOTE", "USDT")
     c.paper = _env_bool("EFRA_PAPER", True)
     c.start_balance = _env_float("EFRA_START_BALANCE", 100.0)
+    c.state_file = os.getenv("EFRA_STATE_FILE", c.state_file)
+    c.log_file = os.getenv("EFRA_LOG_FILE", c.log_file)
 
     # Keep strategy defaults aligned with the current Sniper v2 configuration,
     # while allowing deployment-time overrides without modifying strategy code.
@@ -112,7 +114,10 @@ def _engine_main() -> None:
         cfg = build_cfg()
         db_url = os.getenv("EFRA_DATABASE_URL", "").strip()
         if db_url:
-            state_key = f"{cfg.exchange}:{cfg.mode}:{'paper' if cfg.paper else 'live'}:{cfg.quote}"
+            state_key = os.getenv(
+                "EFRA_STATE_KEY",
+                f"{cfg.exchange}:{cfg.mode}:{'paper' if cfg.paper else 'live'}:{cfg.quote}",
+            )
             store = PostgresStore(db_url, state_key)
             _store = store
             store.ensure_schema()
