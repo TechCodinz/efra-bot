@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from efra_bot import Bot, MakerBot, Cfg
@@ -296,6 +297,20 @@ def snapshot() -> dict[str, Any]:
                 "status": "position" if sym in bot.pos else "pending" if sym in pending_map else "signal_ready" if ready else "monitoring",
             })
 
+        trade_history = _recent_trades(bot, 200)
+        realized_pnl = sum(float(t.get("pnl_quote", 0)) for t in trade_history)
+        gross_profit = sum(max(0.0, float(t.get("pnl_quote", 0))) for t in trade_history)
+        gross_loss = sum(max(0.0, -float(t.get("pnl_quote", 0))) for t in trade_history)
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (None if gross_profit <= 0 else 9.9)
+        net_bps_samples = [
+            (float(t.get("pnl_quote", 0)) / (float(t.get("entry", 0)) * float(t.get("qty", 0)))) * 1e4
+            for t in trade_history
+            if float(t.get("entry", 0)) > 0 and float(t.get("qty", 0)) > 0
+        ]
+        average_net_bps = (
+            sum(net_bps_samples) / len(net_bps_samples)
+            if net_bps_samples else 0.0
+        )
         slots, alloc = bot.get_slot_allocation(eq)
         return {
             "ok": err is None,
@@ -312,6 +327,7 @@ def snapshot() -> dict[str, Any]:
             "quote": bot.c.quote,
             "feed": "websocket" if bot.ws_engine else "rest",
             "equity": eq,
+            "cash": float(bot._quote_free()),
             "start_equity": start_eq,
             "total_pnl": eq - start_eq,
             "total_pnl_pct": ((eq / start_eq) - 1.0) * 100 if start_eq else 0.0,
@@ -320,6 +336,9 @@ def snapshot() -> dict[str, Any]:
             "drawdown_pct": ((hwm - eq) / hwm) * 100 if hwm else 0.0,
             "trades": int(bot.n_trades),
             "wins": int(bot.n_wins),
+            "realized_pnl": realized_pnl,
+            "profit_factor": profit_factor,
+            "average_net_bps_per_trade": average_net_bps,
             "win_rate": (bot.n_wins / bot.n_trades * 100.0) if bot.n_trades else 0.0,
             "compound_tier": int(bot.compound_tier),
             "loss_streak": int(bot.loss_streak),
@@ -331,7 +350,7 @@ def snapshot() -> dict[str, Any]:
             "positions": positions,
             "pending": pending,
             "radar": radar,
-            "recent_trades": _recent_trades(bot),
+            "recent_trades": trade_history[-20:],
             "config": {
                 "tp_bps": bot.c.tp_bps,
                 "sl_bps": bot.c.sl_bps,
@@ -413,6 +432,17 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="EFRA Ultra-Precision Sniper v2", version="2.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://efra-microstructure-paper-live.onrender.com",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/", response_class=HTMLResponse)
