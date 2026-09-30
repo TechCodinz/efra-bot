@@ -188,6 +188,13 @@ class Bot:
             import ccxt
         except ImportError:
             raise SystemExit("ccxt is not installed. Run:  pip install ccxt")
+
+        # Human-facing configs often call Gate "gateio", while ccxt's
+        # canonical exchange id is "gate". Normalize the alias once here
+        # so CLI, Render and local launchers cannot drift on the identifier.
+        aliases = {"gateio": "gate", "gate.io": "gate"}
+        c.exchange = aliases.get(c.exchange.strip().lower(), c.exchange.strip().lower())
+
         if not hasattr(ccxt, c.exchange):
             near = [x for x in ccxt.exchanges if c.exchange.lower() in x][:8]
             raise SystemExit(f"Unknown exchange '{c.exchange}'."
