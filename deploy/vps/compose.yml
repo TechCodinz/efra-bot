@@ -1,7 +1,7 @@
 services:
   efra-sniper-v2:
     build:
-      context: ../..
+      context: /opt/app-platform/src/efra-sniper-v2
       dockerfile: Dockerfile.vps
     container_name: efra-sniper-v2
     restart: unless-stopped
