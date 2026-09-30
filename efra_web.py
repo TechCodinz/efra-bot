@@ -20,6 +20,11 @@ from fastapi.responses import HTMLResponse
 
 from efra_bot import Bot, MakerBot, Cfg
 
+logging.basicConfig(
+    level=getattr(logging, os.getenv("EFRA_LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+    force=True,
+)
 log = logging.getLogger("efra.web")
 
 _state_lock = threading.Lock()
@@ -86,7 +91,15 @@ def _engine_main() -> None:
     try:
         cfg = build_cfg()
         bot_cls = MakerBot if cfg.mode == "maker" else Bot
+        log.info(
+            "engine boot | exchange=%s mode=%s capital_mode=%s start_balance=%.2f",
+            cfg.exchange, cfg.mode, "PAPER" if cfg.paper else "LIVE", cfg.start_balance,
+        )
         bot = bot_cls(cfg)
+        log.info(
+            "engine constructed | exchange=%s websocket=%s markets=%d",
+            bot.c.exchange, bool(bot.ws_engine), len(getattr(bot.ex, "markets", {}) or {}),
+        )
         with _state_lock:
             _bot = bot
             _engine_started_at = time.time()
