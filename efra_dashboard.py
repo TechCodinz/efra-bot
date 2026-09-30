@@ -40,6 +40,9 @@ class EfraDashboard:
         pending = getattr(b, "pending", {})
         open_risk = len(b.pos) + len(pending)
         loss_streak = getattr(b, "loss_streak", 0)
+        macro_safe = getattr(b, "last_macro_safe", True)
+        btc_mom = getattr(b, "last_btc_mom", 0.0)
+        pause_remaining = getattr(b, "last_inter_trade_pause_remaining", 0.0)
 
         # Tier & Compounding calculations
         tier = getattr(b, "compound_tier", 1)
@@ -93,8 +96,8 @@ class EfraDashboard:
             f" [bold]Slots[/]\n{open_risk}/{slots} · {alloc_frac*100:.0f}% each",
             f" [bold]Compounding[/]\nTier {tier} · {tier_prog:.0f}% to +{c.compound_step*100:.0f}%",
             f" [bold]Loss Shield[/]\n{'[yellow]DEFENSIVE[/]' if loss_streak >= 2 else '[green]NORMAL[/]'} · streak {loss_streak}",
-            f" [bold]BTC Filter[/]\n{'[green]ON[/]' if c.btc_filter else '[yellow]OFF[/]'}",
-            f" [bold]Daily Guard[/]\n{c.daily_loss_limit_frac*100:.0f}% max loss",
+            f" [bold]BTC Regime[/]\n{'[green]SAFE[/]' if macro_safe else '[red]BLOCK[/]'} {btc_mom:+.1f}bps",
+            f" [bold]Redeploy Gate[/]\n{'[green]READY[/]' if pause_remaining <= 0 else '[yellow]PAUSE[/] ' + format(pause_remaining, '.1f') + 's'}",
         )
         layout["risk"].update(Panel(risk_table, title="Autonomous Risk & Compounding Control", style="yellow"))
 
@@ -207,8 +210,14 @@ class EfraDashboard:
                 status = "[dim]Monitoring[/]"
                 if sym in b.pos:
                     status = "[bold magenta]IN TRADE[/]"
+                elif sym in pending:
+                    status = "[bold yellow]RESTING MAKER[/]"
                 elif b.cool.get(sym, 0) > now:
                     status = f"[yellow]Cooldown ({int(b.cool[sym] - now)}s)[/]"
+                elif ready and not macro_safe:
+                    status = "[red]BTC REGIME BLOCK[/]"
+                elif ready and pause_remaining > 0:
+                    status = f"[yellow]REDEPLOY {pause_remaining:.1f}s[/]"
                 elif ready:
                     status = "[bold green]SIGNAL READY[/]"
 
