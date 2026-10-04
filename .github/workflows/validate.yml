@@ -1,4 +1,5 @@
 name: Validate EFRA Python
+# smart-exit integration validation
 
 on:
   push:
