@@ -205,6 +205,7 @@ def analyze(args, out):
             ]
             if efra_ok:
                 labels.append("EFRA_RULE")
+                labels.append(f"EFRA_SYM:{sym}")
                 paths = []
                 if efra_obi:  paths.append("OBI")
                 if efra_conf: paths.append("CONF")
@@ -248,10 +249,20 @@ def analyze(args, out):
                     seg_mae[key].append(loss_m)
 
                 if efra_ok:
-                    mk_key = (f"MAKER:{sym}", h, ep)
-                    seg_net[mk_key].append(mk_net)
-                    mk_key2 = ("MAKER_EFRA", h, ep)
-                    seg_net[mk_key2].append(mk_net)
+                    # Maker analysis must carry the same supporting metrics as taker
+                    # analysis and use the same horizon thinning; otherwise get_by_epoch()
+                    # crashes (missing gross/MFE/MAE) and the t-stat is inflated by
+                    # heavily overlapping snapshots.
+                    for mk_lbl in (f"MAKER:{sym}", "MAKER_EFRA"):
+                        tk = (mk_lbl, h, sym)
+                        if t < last_tk.get(tk, 0):
+                            continue
+                        last_tk[tk] = t + h
+                        mk_key = (mk_lbl, h, ep)
+                        seg_net[mk_key].append(mk_net)
+                        seg_gross[mk_key].append(gross)
+                        seg_mfe[mk_key].append(win_m)
+                        seg_mae[mk_key].append(loss_m)
 
     # summary stats
     if spreads:
@@ -273,8 +284,17 @@ def analyze(args, out):
         if not ref: return None
         ci = ref["ci"]
         ci_s = f"[{ci[0]:+.1f},{ci[1]:+.1f}]" if ci[0] is not None else "N/A"
-        oos_s = ("[OK]" if by_ep.get(2) and by_ep[2]["mean_net"]>0
-                 else ("~" if by_ep.get(1) and by_ep[1]["mean_net"]>0 else "[NO]"))
+        oos_ok = (
+            by_ep.get(2)
+            and by_ep[2]["mean_net"] > 0
+            and by_ep[2]["t"] >= TSTAT_THRESHOLD
+        )
+        val_ok = (
+            by_ep.get(1)
+            and by_ep[1]["mean_net"] > 0
+            and by_ep[1]["t"] >= TSTAT_THRESHOLD
+        )
+        oos_s = "[OK]" if oos_ok else ("~" if val_ok else "[NO]")
         return (f"  {lbl[:38]:<38} {h:>3}s"
                 f" n={ref['n']:>5}"
                 f" net={ref['mean_net']:>+7.2f}"
@@ -383,7 +403,7 @@ def analyze(args, out):
     print(f"  {'Symbol':<20} {'OOS_net':>10} {'n':>6} {'hit%':>7} {'t':>6}", file=P)
     results = []
     for sym in sorted(data.keys()):
-        by = get_by_epoch(f"sym:{sym}", 60)
+        by = get_by_epoch(f"EFRA_SYM:{sym}", 60)
         ref = by.get(2) or by.get(1) or by.get(0)
         if ref:
             results.append((sym, ref["mean_net"], ref["n"], ref["hit"], ref["t"]))
