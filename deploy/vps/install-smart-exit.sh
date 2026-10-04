@@ -150,6 +150,58 @@ PY
 chmod 600 "$ENV"
 
 echo
+echo "===== MIGRATE VERSIONED TRADE CSV (PRESERVE HISTORY) ====="
+python3 - "$STATE/efra_trades.csv" <<'PY'
+import csv, os, shutil, sys, tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists() or path.stat().st_size == 0:
+    print("Trade CSV absent/empty; new engine will create the versioned header.")
+    raise SystemExit(0)
+
+old = ["ts","symbol","entry","exit","qty","pnl_quote","reason","equity","tier"]
+new = old + ["strategy_version","entry_policy","signal_path"]
+
+with path.open("r", newline="", encoding="utf-8") as fh:
+    rows = list(csv.reader(fh))
+
+if not rows:
+    print("Trade CSV empty; no migration required.")
+    raise SystemExit(0)
+
+header = rows[0]
+if header == new:
+    print("Trade CSV already uses versioned header.")
+    raise SystemExit(0)
+
+if header != old:
+    print("ABORT: unexpected trade CSV header:", header)
+    raise SystemExit(3)
+
+backup = path.with_suffix(path.suffix + ".pre-versioning.bak")
+if not backup.exists():
+    shutil.copy2(path, backup)
+
+fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+os.close(fd)
+try:
+    with open(tmp_name, "w", newline="", encoding="utf-8") as out:
+        w = csv.writer(out)
+        w.writerow(new)
+        for row in rows[1:]:
+            if len(row) < len(new):
+                row = row + [""] * (len(new) - len(row))
+            w.writerow(row)
+    os.replace(tmp_name, path)
+finally:
+    if os.path.exists(tmp_name):
+        os.unlink(tmp_name)
+
+print(f"Migrated {max(0, len(rows)-1)} historical rows; backup={backup}")
+PY
+
+echo
 echo "===== BUILD + RESTART EXECUTION ONLY ====="
 cd "$STACK"
 docker compose -p efra-sniper-v2 -f compose.yml up -d --build --remove-orphans
