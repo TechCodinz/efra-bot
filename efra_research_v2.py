@@ -74,8 +74,11 @@ SLIP_BPS       = 1.0    # Estimated slippage per side (bps)
 MAKER_FEE_BPS  = 20.0   # Gate maker fee per side (bps)
 
 HORIZONS       = (5, 15, 30, 60, 120, 180)
-MIN_SAMPLES    = 50
-TSTAT_MIN      = 2.0
+MIN_SAMPLES        = 50
+TSTAT_MIN          = 2.0
+PROMOTION_MIN_OOS  = 200
+PROMOTION_MIN_SYMS = 2
+MIN_SYM_OOS        = 20
 
 # --------------------------------------------------------------------------
 # DB SCHEMA
@@ -906,22 +909,31 @@ def analyze(args):
         return 2
 
     def query_segment(where, h, is_maker=False):
-        """Query net forward returns for a segment at horizon h."""
-        fwd_col = f"fwd_{h}s"
-        rtc_col = "cost_bps" if not is_maker else f"({2*mfee + 2*slip})"
+        """Query horizon-thinned net forward returns for a segment.
 
-        # We need ts for epoch split, so select ts + fwd + cost + mfe/mae
+        Rows are sampled no more than once per horizon per symbol so a 1-second
+        recorder does not turn one 60-second price move into ~60 correlated
+        "independent" observations and inflate n/t-stat.
+        """
+        fwd_col = f"fwd_{h}s"
+
         rows_all = db.execute(
-            f"""SELECT ts, {fwd_col}, cost_bps, mfe_60s, mae_60s
+            f"""SELECT ts, sym, {fwd_col}, cost_bps, mfe_60s, mae_60s
                 FROM snaps
                 WHERE filled=1 AND {fwd_col} IS NOT NULL AND ({where})
-                ORDER BY ts""",
+                ORDER BY sym, ts""",
         ).fetchall()
 
         by_ep = {0: [], 1: [], 2: []}
-        for ts, fwd, cost, mfe, mae in rows_all:
-            if fwd is None: continue
+        last_keep = {}
+        for ts, sym, fwd, cost, mfe, mae in rows_all:
+            if fwd is None:
+                continue
             ep = epoch(ts)
+            key = (ep, sym)
+            if ts < last_keep.get(key, float("-inf")):
+                continue
+            last_keep[key] = ts + h
             if is_maker:
                 net = fwd - (2 * mfee + 2 * slip)
             else:
@@ -929,6 +941,38 @@ def analyze(args):
             by_ep[ep].append((net, fwd, mfe or 0, mae or 0))
 
         return by_ep
+
+    def oos_symbol_support(where, h, is_maker=False):
+        """Count symbols with positive OOS mean net EV after horizon thinning."""
+        fwd_col = f"fwd_{h}s"
+        rows = db.execute(
+            f"""SELECT ts, sym, {fwd_col}, cost_bps
+                FROM snaps
+                WHERE filled=1 AND ts>=? AND {fwd_col} IS NOT NULL AND ({where})
+                ORDER BY sym, ts""",
+            (s2,),
+        ).fetchall()
+
+        by_sym = defaultdict(list)
+        last_keep = {}
+        for ts, sym, fwd, cost in rows:
+            if fwd is None:
+                continue
+            if ts < last_keep.get(sym, float("-inf")):
+                continue
+            last_keep[sym] = ts + h
+            net = (
+                fwd - (2 * mfee + 2 * slip)
+                if is_maker
+                else fwd - (cost if cost else 2*fee+2*slip+5)
+            )
+            by_sym[sym].append(net)
+
+        positive = []
+        for sym, nets in by_sym.items():
+            if len(nets) >= MIN_SYM_OOS and statistics.fmean(nets) > 0:
+                positive.append(sym)
+        return positive
 
     def summarize_ep(obs_list):
         if len(obs_list) < MIN_SAMPLES:
@@ -951,9 +995,23 @@ def analyze(args):
         }
 
     def is_positive(by_ep_summary):
+        """Exploratory positive flag; not sufficient for promotion."""
         valid = [v for v in by_ep_summary.values() if v]
-        return (valid and
-                all(v["mean_net"] > 0 and v["t"] >= TSTAT_MIN for v in valid))
+        return bool(valid and all(v["mean_net"] > 0 and v["t"] >= TSTAT_MIN for v in valid))
+
+    def is_promotable(where, h, by_ep_summary, is_maker=False):
+        """Hard PAPER-promotion gate: OOS EV/t/n plus multi-symbol support."""
+        oos = by_ep_summary.get(2)
+        if not oos:
+            return False, []
+        support = oos_symbol_support(where, h, is_maker=is_maker)
+        ok = (
+            oos["mean_net"] > 0
+            and oos["t"] >= TSTAT_MIN
+            and oos["n"] >= PROMOTION_MIN_OOS
+            and len(support) >= PROMOTION_MIN_SYMS
+        )
+        return ok, support
 
     def print_section(title, subset_candidates, h_list=None):
         print(f"\n{'-'*72}")
@@ -976,10 +1034,16 @@ def analyze(args):
 
                 ci = ref["ci"]
                 ci_s = f"[{ci[0]:+.1f},{ci[1]:+.1f}]" if ci[0] is not None else "N/A"
-                oos_s = ("[OK]" if by_ep_sum.get(2) and by_ep_sum[2]["mean_net"] > 0
-                         else ("[~]" if by_ep_sum.get(1) and by_ep_sum[1]["mean_net"] > 0
-                               else "[NO]"))
-                pos = " <-- POSITIVE OOS" if is_positive(by_ep_sum) else ""
+                promotable, support = is_promotable(where, h, by_ep_sum, is_maker=is_mk)
+                oos = by_ep_sum.get(2)
+                oos_s = (
+                    "[OK]" if promotable
+                    else ("[~]" if oos and oos["mean_net"] > 0 else "[NO]")
+                )
+                pos = (
+                    f" <-- PROMOTION GATE PASSED ({len(support)} positive OOS symbols)"
+                    if promotable else ""
+                )
 
                 print(col_hdr.format(
                     label[:30], h, ref["n"], ref["mean_net"], ref["med_net"],
@@ -1028,10 +1092,16 @@ def analyze(args):
                 continue
             ci = ref["ci"]
             ci_s = f"[{ci[0]:+.1f},{ci[1]:+.1f}]" if ci[0] is not None else "N/A"
-            oos_s = ("[OK]" if by_ep_sum.get(2) and by_ep_sum[2]["mean_net"] > 0
-                     else ("[~]" if by_ep_sum.get(1) and by_ep_sum[1]["mean_net"] > 0
-                           else "[NO]"))
-            pos = " <-- POSITIVE OOS" if is_positive(by_ep_sum) else ""
+            promotable, support = is_promotable(c[1], h, by_ep_sum, is_maker=(label in maker_labels))
+            oos = by_ep_sum.get(2)
+            oos_s = (
+                "[OK]" if promotable
+                else ("[~]" if oos and oos["mean_net"] > 0 else "[NO]")
+            )
+            pos = (
+                f" <-- PROMOTION GATE PASSED ({len(support)} positive OOS symbols)"
+                if promotable else ""
+            )
             print(col_hdr.format(
                 label[:30], h, ref["n"], ref["mean_net"], ref["med_net"],
                 ref["mean_gross"], ref["hit"], ref["mfe"], ref["mae"], ref["t"],
@@ -1083,25 +1153,40 @@ def analyze(args):
     print("  VERDICT")
     print(f"{'='*72}")
 
-    best_positive = []
+    promotable_candidates = []
+    exploratory_positive = []
     for label, where in candidates:
         is_mk = label in maker_labels
         by_ep_raw = query_segment(where, 60, is_maker=is_mk)
         by_ep_sum = {ep: summarize_ep(obs) for ep, obs in by_ep_raw.items()}
-        if is_positive(by_ep_sum):
-            ref = by_ep_sum.get(2) or by_ep_sum.get(1)
-            if ref:
-                best_positive.append((label, ref["mean_net"], ref["n"], ref["t"]))
+        oos = by_ep_sum.get(2)
+        if oos and oos["mean_net"] > 0 and oos["t"] >= TSTAT_MIN:
+            exploratory_positive.append((label, oos["mean_net"], oos["n"], oos["t"]))
+        ok, support = is_promotable(where, 60, by_ep_sum, is_maker=is_mk)
+        if ok and oos:
+            promotable_candidates.append(
+                (label, oos["mean_net"], oos["n"], oos["t"], support)
+            )
 
-    if best_positive:
-        best_positive.sort(key=lambda x: -x[1])
-        print(f"\n  OOS-POSITIVE candidates at 60s:")
-        for label, ev, n, ts in best_positive:
-            print(f"    {label:<30} OOS_net={ev:>+8.2f}bps  n={n}  t={ts:>+.2f}")
-        print(f"\n  ACTION: Promote the top candidate to shadow challenger.")
-        print(f"  Confirm at 30s and 15s horizons. Verify no single-symbol dependence.")
-        print(f"  Only after n>=200 OOS with consistent t>=2: enable PAPER execution.")
+    if promotable_candidates:
+        promotable_candidates.sort(key=lambda x: -x[1])
+        print(f"\n  PROMOTION-GATE candidates at 60s:")
+        for label, ev, n, ts, support in promotable_candidates:
+            print(
+                f"    {label:<30} OOS_net={ev:>+8.2f}bps  n={n}  t={ts:>+.2f}  "
+                f"positive_symbols={len(support)}"
+            )
+        print(f"\n  ACTION: Promote the top candidate to SHADOW only.")
+        print(f"  Confirm at 30s and 15s horizons before PAPER.")
     else:
+        if exploratory_positive:
+            print(f"\n  Some OOS means are positive but NONE passes the hard promotion gate:")
+            for label, ev, n, ts in sorted(exploratory_positive, key=lambda x: -x[1])[:10]:
+                print(f"    {label:<30} OOS_net={ev:>+8.2f}bps  n={n}  t={ts:>+.2f}")
+        print(
+            f"\n  Hard gate requires OOS mean_net>0, t>={TSTAT_MIN:.1f}, "
+            f"n>={PROMOTION_MIN_OOS}, and >={PROMOTION_MIN_SYMS} positive symbols."
+        )
         print(f"\n  No candidate shows positive OOS net EV at 60s.")
         print(f"  Check Section 4 for shorter horizons (5s, 15s, 30s).")
         print(f"  If gross moves are positive but net is negative, the issue is costs:")
