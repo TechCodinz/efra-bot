@@ -222,6 +222,9 @@ def _recent_trades(bot: Bot, limit: int = 20) -> list[dict[str, Any]]:
                 "reason": row.get("reason") or "",
                 "equity": float(row.get("equity") or 0),
                 "tier": int(float(row.get("tier") or 0)),
+                "strategy_version": row.get("strategy_version") or "",
+                "entry_policy": row.get("entry_policy") or "",
+                "signal_path": row.get("signal_path") or "",
             })
         except (TypeError, ValueError):
             continue
@@ -273,7 +276,10 @@ def snapshot() -> dict[str, Any]:
                 "trailing_active": bool(p.get("trailing_active")),
                 "age_s": max(0.0, time.time() - float(p.get("ts", time.time()))),
                 "signal_path": p.get("signal_path", "unknown"),
-                "entry_mom_bps": float(p.get("entry_mom_bps", 0.0)),
+                "entry_cvd": float(p.get("entry_cvd", 0.5)),
+                "entry_imb": float(p.get("entry_imb", 0.5)),
+                "entry_mom_bps": float(p.get("entry_mom", p.get("entry_mom_bps", 0.0))),
+                "entry_accel_bps": float(p.get("entry_accel", 0.0)),
                 "entry_confidence": float(p.get("entry_confidence", 0.0)),
                 "entry_cost_bps": float(p.get("entry_cost_bps", 0.0)),
             })
