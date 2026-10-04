@@ -61,8 +61,8 @@ else
 fi
 
 if [ -d "$SRC/.git" ]; then
-  git -C "$SRC" fetch origin "$BRANCH"
-  git -C "$SRC" checkout -B "$BRANCH" "origin/$BRANCH"
+  git -C "$SRC" fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
+  git -C "$SRC" checkout -B "$BRANCH" "refs/remotes/origin/$BRANCH"
 else
   rm -rf "$SRC"
   git clone --branch "$BRANCH" --single-branch "$REPO" "$SRC"
