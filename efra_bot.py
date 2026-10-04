@@ -52,12 +52,20 @@ try:
 except ImportError:
     HAS_STREAM_ENGINE = False
 
+import datetime
+
 try:
     from efra_dashboard import EfraDashboard
     HAS_DASHBOARD = True
 except ImportError:
     HAS_DASHBOARD = False
 
+# ── Strategy version identifiers ────────────────────────────────────────────
+# Increment ENTRY_POLICY_VERSION whenever entry thresholds or signal paths change.
+# This tags every closed trade so performance can be segregated by policy build.
+STRATEGY_VERSION  = "smart-exit-v1"   # architectural version
+ENTRY_POLICY_VERSION = "ep-20261004"  # entry parameter snapshot date
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Cfg:
@@ -173,6 +181,8 @@ class Bot:
         self.last_scan = 0.0
         self.day_start = time.time()
         self.day_start_eq = None
+        # day_start_date: UTC calendar date string used for restart-safe daily loss guard
+        self.day_start_date: str = ""
         self.halted = False
         self.n_trades = 0
         self.n_wins = 0
@@ -367,9 +377,11 @@ class Bot:
 
     # ---------- state & persistence ----------
     def save_state(self):
+        """Persist all adaptive state so restarts never reset risk budgets or strategy memory."""
         try:
             with open(self.c.state_file, "w") as f:
                 json.dump({
+                    # Core book-keeping
                     "pos": self.pos,
                     "cash": self.cash,
                     "n_trades": self.n_trades,
@@ -377,11 +389,23 @@ class Bot:
                     "compound_tier": self.compound_tier,
                     "last_tier_equity": self.last_tier_equity,
                     "high_water_mark": self.high_water_mark,
+                    # Adaptive risk state — MUST survive restart
+                    "loss_streak": self.loss_streak,
+                    "kelly_wins": list(self._kelly_wins),
+                    "kelly_payoffs": list(self._kelly_payoffs),
+                    # Daily loss guard — persisted as UTC calendar date + baseline equity
+                    # so a container restart mid-day does NOT create a fresh risk budget
+                    "day_start_date": self.day_start_date,
+                    "day_start_eq": self.day_start_eq,
+                    # Strategy version tag
+                    "strategy_version": STRATEGY_VERSION,
+                    "entry_policy": ENTRY_POLICY_VERSION,
                 }, f)
         except Exception:
             logging.exception("could not save state")
 
     def recover_state(self):
+        """Restore all adaptive state, preserving daily loss guard across restarts."""
         if not os.path.exists(self.c.state_file):
             return
         try:
@@ -390,6 +414,7 @@ class Bot:
         except Exception:
             logging.warning("state file unreadable, ignoring")
             return
+
         self.n_trades = st.get("n_trades", 0)
         self.n_wins = st.get("n_wins", 0)
         self.compound_tier = st.get("compound_tier", 1)
@@ -397,6 +422,30 @@ class Bot:
         self.high_water_mark = st.get("high_water_mark", self.cash)
         if self.c.paper:
             self.cash = st.get("cash", self.cash)
+
+        # Restore adaptive risk memory
+        self.loss_streak = st.get("loss_streak", 0)
+        for v in st.get("kelly_wins", []):
+            self._kelly_wins.append(v)
+        for v in st.get("kelly_payoffs", []):
+            self._kelly_payoffs.append(v)
+
+        # === DAILY LOSS GUARD — restart-safe ===
+        # If a saved day_start_date exists and matches TODAY (UTC), restore the
+        # saved day_start_eq so the 8% budget is NOT silently reset by a redeploy.
+        # If the date is stale (yesterday), let the normal step() logic re-anchor.
+        import datetime
+        today_utc = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        saved_date = st.get("day_start_date", "")
+        saved_eq = st.get("day_start_eq")
+        if saved_date == today_utc and saved_eq is not None:
+            self.day_start_date = saved_date
+            self.day_start_eq = float(saved_eq)
+            logging.info(
+                "Daily loss guard restored: date=%s baseline=$%.4f (NOT reset by restart)",
+                saved_date, self.day_start_eq
+            )
+
         for sym, p in (st.get("pos") or {}).items():
             if sym in self.ex.markets:
                 p["ts"] = time.time()
@@ -408,7 +457,9 @@ class Bot:
         if not os.path.exists(self.c.log_file):
             with open(self.c.log_file, "w", newline="") as f:
                 csv.writer(f).writerow(
-                    ["ts", "symbol", "entry", "exit", "qty", "pnl_quote", "reason", "equity", "tier"])
+                    ["ts", "symbol", "entry", "exit", "qty", "pnl_quote",
+                     "reason", "equity", "tier",
+                     "strategy_version", "entry_policy", "signal_path"])
 
     def _quote_free(self, fresh=False):
         if self.c.paper:
@@ -691,12 +742,24 @@ class Bot:
             "stop_bps": -c.sl_bps,
             "be_locked": False,
             "trailing_active": False,
+            # Entry diagnostics — carried through to close() for CSV tagging
+            "signal_path": s.get("signal_path", ""),
+            "entry_cvd": s.get("entry_cvd", s.get("cvd_5s", 0.5)),
+            "entry_imb": s.get("entry_imb", s.get("imb", 0.5)),
+            "entry_mom": s.get("entry_mom", s.get("mom", 0.0)),
+            "entry_accel": s.get("entry_accel", s.get("mom_accel", 0.0)),
+            "entry_cost_bps": s.get("entry_cost_bps", 2 * (c.fee_bps + c.slippage_bps)),
         }
         self._bal_cache = (0.0, None)
         self.save_state()
-        logging.info("BUY  %s @ %.8g | OBI=%.2f CVD=%.2f Mom=%.1fbps Conf=%.1f | Cost=$%.2f",
-                     sym, entry, s.get("imb", 0.5), s.get("cvd_5s", 0.5), s["mom"],
-                     s.get("confluence", 0.0), quote_amt)
+        logging.info(
+            "BUY  %s @ %.8g | Path=%s OBI=%.2f CVD=%.2f Mom=%.1fbps Accel=%.1f Conf=%.1f Cost=%.1fbps | $%.2f",
+            sym, entry,
+            s.get("signal_path", "?"),
+            s.get("imb", 0.5), s.get("cvd_5s", 0.5), s.get("mom", 0.0),
+            s.get("mom_accel", 0.0), s.get("confluence", 0.0),
+            s.get("entry_cost_bps", 0.0), quote_amt
+        )
 
     def close(self, sym, s, reason, books):
         c = self.c
@@ -780,7 +843,9 @@ class Bot:
         with open(c.log_file, "a", newline="") as f:
             csv.writer(f).writerow([
                 int(time.time()), sym, p["entry"], exit_px, qty,
-                round(pnl, 6), reason, round(eq, 4), self.compound_tier
+                round(pnl, 6), reason, round(eq, 4), self.compound_tier,
+                STRATEGY_VERSION, ENTRY_POLICY_VERSION,
+                p.get("signal_path", ""),
             ])
 
         self.cool[sym] = time.time() + c.cooldown_s
@@ -812,8 +877,16 @@ class Bot:
         eq = self.equity(books)
         self.check_compounding(eq)
 
-        if self.day_start_eq is None or now - self.day_start > 86400:
-            self.day_start, self.day_start_eq = now, eq
+        # Daily loss guard — anchored to UTC calendar date
+        # On first step of a new UTC day (or first ever), set the baseline.
+        # On restart within the SAME day, recover_state() already restored day_start_eq,
+        # so this block is skipped — the risk budget is NOT reset.
+        today_utc = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        if self.day_start_date != today_utc or self.day_start_eq is None:
+            self.day_start_date = today_utc
+            self.day_start_eq = eq
+            self.day_start = now
+            logging.info("Daily loss guard anchored: date=%s baseline=$%.4f", today_utc, eq)
 
         # Daily loss limit check
         if eq < self.day_start_eq * (1.0 - c.daily_loss_limit_frac):
@@ -1025,13 +1098,19 @@ class Bot:
             sig_accel = (mom_accel >= 3.0 and mom >= c.min_mom_bps
                          and cvd >= 0.68 and imb >= 0.65 and micro_skew > 0.5)
 
+            # Determine which paths fired for diagnostics and CSV tagging
             if require_all_gates:
-                # Severe losing streak: ALL four signal components must be positive
                 fired = (imb >= effective_imb and cvd >= c.min_cvd
                          and mom >= c.min_mom_bps and conf >= effective_conf
                          and micro_skew >= 1.0)
+                path_label = "ALL" if fired else ""
             else:
                 fired = sig_obi or sig_conf or sig_tape or sig_accel
+                path_label = "+".join([
+                    name for name, ok in
+                    (("OBI", sig_obi), ("CONF", sig_conf), ("TAPE", sig_tape), ("ACCEL", sig_accel))
+                    if ok
+                ])
 
             # === SMART RE-ENTRY: bypass pause for confirmed continuing moves ===
             re_entry = c.smart_reentry and sym in self._early_exits
@@ -1041,11 +1120,19 @@ class Bot:
                 # Only re-enter if price has moved at least 5 bps above exit AND signals still positive
                 if price_moved >= 5.0 and cvd >= c.min_cvd and imb >= 0.60 and mom >= c.min_mom_bps:
                     fired = True
+                    path_label = "REENTRY"
                     logging.info("SMART RE-ENTRY %s: price +%.1fbps above exit, momentum sustained",
                                  sym, price_moved)
                     del self._early_exits[sym]
 
-            if fired:
+            if fired and path_label:
+                # Attach entry diagnostics to snapshot for position tracking
+                s["signal_path"] = path_label
+                s["entry_cvd"] = cvd
+                s["entry_imb"] = imb
+                s["entry_mom"] = mom
+                s["entry_accel"] = mom_accel
+                s["entry_cost_bps"] = cost
                 quote_amt = self._quote_free(fresh=not c.paper) * alloc_frac
                 self.open(sym, s, quote_amt)
 
