@@ -10,6 +10,7 @@ import csv
 import json
 import logging
 import os
+import sqlite3
 import threading
 import urllib.request
 import urllib.error
@@ -232,9 +233,62 @@ def _recent_trades(bot: Bot, limit: int = 20) -> list[dict[str, Any]]:
     return out
 
 
+def _research_v2_status() -> dict[str, Any]:
+    """Read-only freshness probe for the host Research v2 recorder."""
+    root = Path(os.getenv("EFRA_RESEARCH_DIR", "/research"))
+    db_path = root / "efra_v2.db"
+    wal_path = root / "efra_v2.db-wal"
+    candidates = [p for p in (db_path, wal_path) if p.exists()]
+    if not candidates:
+        return {
+            "version": "v2",
+            "connected": False,
+            "db_present": False,
+            "age_s": None,
+            "last_snap_at": None,
+            "pairs": 0,
+        }
+
+    newest_mtime = max(p.stat().st_mtime for p in candidates)
+    age_s = max(0.0, time.time() - newest_mtime)
+    connected = age_s <= 45.0
+    last_snap_at = None
+    pairs = 0
+
+    # Keep this bounded: only two scalar queries, read-only, and fail open to
+    # file-freshness status if SQLite is momentarily busy.
+    if db_path.exists():
+        try:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.2)
+            try:
+                row = con.execute("SELECT MAX(ts) FROM snaps").fetchone()
+                last_snap_at = float(row[0]) if row and row[0] is not None else None
+                row = con.execute("SELECT COUNT(DISTINCT sym) FROM snaps").fetchone()
+                pairs = int(row[0]) if row and row[0] is not None else 0
+            finally:
+                con.close()
+        except Exception:
+            pass
+
+    if last_snap_at is not None:
+        age_s = max(0.0, time.time() - last_snap_at)
+        connected = age_s <= 45.0
+
+    return {
+        "version": "v2",
+        "connected": connected,
+        "db_present": True,
+        "age_s": age_s,
+        "last_snap_at": last_snap_at,
+        "pairs": pairs,
+        "feed": "gate-websocket-tape",
+    }
+
+
 def _paused_snapshot() -> dict[str, Any]:
     """Serve last persisted PAPER state while execution is intentionally disabled."""
     cfg = build_cfg()
+    research = _research_v2_status()
     state_path = Path(os.getenv("EFRA_STATE_FILE", "/data/efra_state.json"))
     log_path = Path(os.getenv("EFRA_LOG_FILE", "/data/efra_trades.csv"))
     state: dict[str, Any] = {}
@@ -347,6 +401,7 @@ def _paused_snapshot() -> dict[str, Any]:
         "execution": cfg.mode,
         "quote": cfg.quote,
         "feed": "research-only",
+        "research": research,
         "equity": equity,
         "cash": cash,
         "frozen_position_value": frozen_position_value,
@@ -1038,6 +1093,8 @@ def health() -> dict[str, Any]:
         "exchange": s.get("exchange"),
         "thread_alive": s.get("thread_alive"),
         "execution_paused": execution_paused,
+        "research_connected": bool((s.get("research") or {}).get("connected")),
+        "research_age_s": (s.get("research") or {}).get("age_s"),
         "error": s.get("error"),
     }
 
