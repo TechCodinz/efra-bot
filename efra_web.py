@@ -7,6 +7,7 @@ efra_bot.py; this module is only the production web/observability shell.
 """
 
 import csv
+import json
 import logging
 import os
 import threading
@@ -231,6 +232,156 @@ def _recent_trades(bot: Bot, limit: int = 20) -> list[dict[str, Any]]:
     return out
 
 
+def _paused_snapshot() -> dict[str, Any]:
+    """Serve last persisted PAPER state while execution is intentionally disabled."""
+    cfg = build_cfg()
+    state_path = Path(os.getenv("EFRA_STATE_FILE", "/data/efra_state.json"))
+    log_path = Path(os.getenv("EFRA_LOG_FILE", "/data/efra_trades.csv"))
+    state: dict[str, Any] = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            log.exception("could not read paused EFRA state")
+
+    trades: list[dict[str, Any]] = []
+    if log_path.exists():
+        try:
+            with log_path.open("r", encoding="utf-8", newline="") as fh:
+                rows = list(csv.DictReader(fh))[-200:]
+            for row in rows:
+                try:
+                    trades.append({
+                        "ts": int(float(row.get("ts") or 0)),
+                        "symbol": row.get("symbol") or "",
+                        "entry": float(row.get("entry") or 0),
+                        "exit": float(row.get("exit") or 0),
+                        "qty": float(row.get("qty") or 0),
+                        "pnl_quote": float(row.get("pnl_quote") or 0),
+                        "reason": row.get("reason") or "",
+                        "equity": float(row.get("equity") or 0),
+                        "tier": int(float(row.get("tier") or 0)),
+                        "strategy_version": row.get("strategy_version") or "",
+                        "entry_policy": row.get("entry_policy") or "",
+                        "signal_path": row.get("signal_path") or "",
+                    })
+                except (TypeError, ValueError):
+                    continue
+        except (OSError, csv.Error):
+            log.exception("could not read paused EFRA trade log")
+
+    cash = float(state.get("cash", cfg.start_balance) or cfg.start_balance)
+    n_trades = int(state.get("n_trades", len(trades)) or 0)
+    n_wins = int(state.get("n_wins", sum(1 for t in trades if t["pnl_quote"] > 0)) or 0)
+    hwm = float(state.get("high_water_mark", max(cash, cfg.start_balance)) or cash)
+    day_eq = float(state.get("day_start_eq", cash) or cash)
+    realized_pnl = sum(float(t.get("pnl_quote", 0)) for t in trades)
+    gross_profit = sum(max(0.0, float(t.get("pnl_quote", 0))) for t in trades)
+    gross_loss = sum(max(0.0, -float(t.get("pnl_quote", 0))) for t in trades)
+    profit_factor = (
+        gross_profit / gross_loss
+        if gross_loss > 0
+        else (None if gross_profit <= 0 else 9.9)
+    )
+    net_bps_samples = [
+        (float(t["pnl_quote"]) / (float(t["entry"]) * float(t["qty"]))) * 1e4
+        for t in trades
+        if float(t.get("entry", 0)) > 0 and float(t.get("qty", 0)) > 0
+    ]
+    avg_net_bps = (
+        sum(net_bps_samples) / len(net_bps_samples)
+        if net_bps_samples else 0.0
+    )
+
+    persisted_positions = []
+    for sym, p in (state.get("pos") or {}).items():
+        try:
+            persisted_positions.append({
+                "symbol": sym,
+                "entry": float(p.get("entry", 0)),
+                "current": float(p.get("entry", 0)),
+                "qty": float(p.get("qty", 0)),
+                "ret_bps": 0.0,
+                "pnl_quote": 0.0,
+                "peak_ret_bps": float(p.get("peak_ret_bps", 0)),
+                "stop_bps": float(p.get("stop_bps", -cfg.sl_bps)),
+                "be_locked": bool(p.get("be_locked")),
+                "trailing_active": bool(p.get("trailing_active")),
+                "age_s": 0.0,
+                "signal_path": p.get("signal_path", "unknown"),
+                "entry_cvd": float(p.get("entry_cvd", 0.5)),
+                "entry_imb": float(p.get("entry_imb", 0.5)),
+                "entry_mom_bps": float(p.get("entry_mom", p.get("entry_mom_bps", 0.0))),
+                "entry_accel_bps": float(p.get("entry_accel", 0.0)),
+                "entry_confidence": float(p.get("entry_confidence", 0.0)),
+                "entry_cost_bps": float(p.get("entry_cost_bps", 0.0)),
+            })
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "ok": True,
+        "engine": "paused_research",
+        "execution_paused": True,
+        "error": None,
+        "thread_alive": False,
+        "lease_status": "disabled",
+        "persistence": "local_persistent",
+        "started_at": None,
+        "uptime_s": 0.0,
+        "mode": "paper" if cfg.paper else "live",
+        "exchange": cfg.exchange,
+        "execution": cfg.mode,
+        "quote": cfg.quote,
+        "feed": "research-only",
+        "equity": cash,
+        "cash": cash,
+        "start_equity": float(cfg.start_balance),
+        "total_pnl": cash - float(cfg.start_balance),
+        "total_pnl_pct": ((cash / cfg.start_balance) - 1.0) * 100 if cfg.start_balance else 0.0,
+        "day_pnl": cash - day_eq,
+        "day_pnl_pct": ((cash / day_eq) - 1.0) * 100 if day_eq else 0.0,
+        "drawdown_pct": ((hwm - cash) / hwm) * 100 if hwm else 0.0,
+        "trades": n_trades,
+        "wins": n_wins,
+        "realized_pnl": realized_pnl,
+        "profit_factor": profit_factor,
+        "average_net_bps_per_trade": avg_net_bps,
+        "win_rate": (n_wins / n_trades * 100.0) if n_trades else 0.0,
+        "compound_tier": int(state.get("compound_tier", 1) or 1),
+        "loss_streak": int(state.get("loss_streak", 0) or 0),
+        "slots": int(cfg.max_positions),
+        "slot_allocation_pct": float(cfg.position_frac) * 100.0,
+        "btc_regime_safe": True,
+        "btc_momentum_bps": 0.0,
+        "redeploy_pause_s": 0.0,
+        "positions": persisted_positions,
+        "pending": [],
+        "radar": [],
+        "recent_trades": trades[-20:],
+        "strategy_version": state.get("strategy_version", ""),
+        "entry_policy": state.get("entry_policy", ""),
+        "config": {
+            "tp_bps": cfg.tp_bps,
+            "sl_bps": cfg.sl_bps,
+            "breakeven_bps": cfg.breakeven_bps,
+            "trail_trigger_bps": cfg.trail_trigger_bps,
+            "trail_bps": cfg.trail_bps,
+            "min_confluence": cfg.min_confluence,
+            "imbalance_entry": cfg.imbalance_entry,
+            "min_cvd": cfg.min_cvd,
+            "min_mom_bps": cfg.min_mom_bps,
+            "max_mom_bps": cfg.max_mom_bps,
+            "min_mom_accel": cfg.min_mom_accel,
+            "min_wall_ratio": cfg.min_wall_ratio,
+            "vol_surge_factor": cfg.vol_surge_factor,
+            "smart_reentry": 1 if cfg.smart_reentry else 0,
+            "daily_loss_limit_pct": cfg.daily_loss_limit_frac * 100.0,
+            "loop_s": cfg.loop_s,
+        },
+    }
+
+
 def snapshot() -> dict[str, Any]:
     with _state_lock:
         bot = _bot
@@ -240,6 +391,8 @@ def snapshot() -> dict[str, Any]:
         lease_status = _lease_status
 
     if bot is None:
+        if not engine_enabled():
+            return _paused_snapshot()
         return {
             "ok": err is None,
             "engine": "starting" if err is None else "failed",
@@ -756,9 +909,19 @@ tick();setInterval(tick,1500);
 </script></body></html>"""
 
 
+def engine_enabled() -> bool:
+    """Whether the trading engine is allowed to run inside the web container."""
+    return _env_bool("EFRA_ENGINE_ENABLED", True)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    start_engine_once()
+    if engine_enabled():
+        start_engine_once()
+    else:
+        log.warning(
+            "EFRA web started in UI-ONLY research mode; execution engine is disabled"
+        )
     yield
 
 
@@ -853,12 +1016,14 @@ def legacy_terminal() -> RedirectResponse:
 @app.get("/health")
 def health() -> dict[str, Any]:
     s = snapshot()
+    execution_paused = bool(s.get("execution_paused"))
     return {
-        "ok": bool(s.get("ok") and s.get("thread_alive")),
+        "ok": bool(s.get("ok") and (s.get("thread_alive") or execution_paused)),
         "engine": s.get("engine"),
         "mode": s.get("mode"),
         "exchange": s.get("exchange"),
         "thread_alive": s.get("thread_alive"),
+        "execution_paused": execution_paused,
         "error": s.get("error"),
     }
 
