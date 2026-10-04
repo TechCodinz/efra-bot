@@ -36,6 +36,30 @@ fi
 export EFRA_HOST_PORT
 echo "EFRA host port: $EFRA_HOST_PORT"
 
+echo
+echo "===== PRE-DEPLOY POSITION SAFETY CHECK ====="
+if curl -fsS "http://127.0.0.1:$EFRA_HOST_PORT/api/status" >/tmp/efra-predeploy.json 2>/dev/null; then
+  if ! python3 - /tmp/efra-predeploy.json <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+positions = p.get("positions") or []
+pending = p.get("pending") or []
+print(f"Open positions: {len(positions)} | Resting orders: {len(pending)}")
+if positions or pending:
+    for row in positions:
+        print(" OPEN:", row.get("symbol"), "PnL=", row.get("pnl_quote"))
+    for row in pending:
+        print(" RESTING:", row.get("symbol"))
+    raise SystemExit(2)
+PY
+  then
+    echo "ABORT: EFRA is not flat. Wait for Server Book to show 0 open / 0 resting, then rerun."
+    exit 2
+  fi
+else
+  echo "Existing EFRA API not reachable; continuing with normal health validation after restart."
+fi
+
 if [ -d "$SRC/.git" ]; then
   git -C "$SRC" fetch origin "$BRANCH"
   git -C "$SRC" checkout -B "$BRANCH" "origin/$BRANCH"
