@@ -271,10 +271,23 @@ def _paused_snapshot() -> dict[str, Any]:
             log.exception("could not read paused EFRA trade log")
 
     cash = float(state.get("cash", cfg.start_balance) or cfg.start_balance)
+
+    # PAPER cash excludes capital allocated to open simulated positions.
+    # In UI-only mode there is intentionally no live market feed, so value
+    # persisted positions at their entry prices instead of incorrectly showing
+    # cash alone as total equity.
+    frozen_position_value = 0.0
+    for _sym, _p in (state.get("pos") or {}).items():
+        try:
+            frozen_position_value += float(_p.get("entry", 0)) * float(_p.get("qty", 0))
+        except (TypeError, ValueError):
+            continue
+    equity = cash + frozen_position_value
+
     n_trades = int(state.get("n_trades", len(trades)) or 0)
     n_wins = int(state.get("n_wins", sum(1 for t in trades if t["pnl_quote"] > 0)) or 0)
-    hwm = float(state.get("high_water_mark", max(cash, cfg.start_balance)) or cash)
-    day_eq = float(state.get("day_start_eq", cash) or cash)
+    hwm = float(state.get("high_water_mark", max(equity, cfg.start_balance)) or equity)
+    day_eq = float(state.get("day_start_eq", equity) or equity)
     realized_pnl = sum(float(t.get("pnl_quote", 0)) for t in trades)
     gross_profit = sum(max(0.0, float(t.get("pnl_quote", 0))) for t in trades)
     gross_loss = sum(max(0.0, -float(t.get("pnl_quote", 0))) for t in trades)
@@ -334,14 +347,15 @@ def _paused_snapshot() -> dict[str, Any]:
         "execution": cfg.mode,
         "quote": cfg.quote,
         "feed": "research-only",
-        "equity": cash,
+        "equity": equity,
         "cash": cash,
+        "frozen_position_value": frozen_position_value,
         "start_equity": float(cfg.start_balance),
-        "total_pnl": cash - float(cfg.start_balance),
-        "total_pnl_pct": ((cash / cfg.start_balance) - 1.0) * 100 if cfg.start_balance else 0.0,
-        "day_pnl": cash - day_eq,
-        "day_pnl_pct": ((cash / day_eq) - 1.0) * 100 if day_eq else 0.0,
-        "drawdown_pct": ((hwm - cash) / hwm) * 100 if hwm else 0.0,
+        "total_pnl": equity - float(cfg.start_balance),
+        "total_pnl_pct": ((equity / cfg.start_balance) - 1.0) * 100 if cfg.start_balance else 0.0,
+        "day_pnl": equity - day_eq,
+        "day_pnl_pct": ((equity / day_eq) - 1.0) * 100 if day_eq else 0.0,
+        "drawdown_pct": ((hwm - equity) / hwm) * 100 if hwm else 0.0,
         "trades": n_trades,
         "wins": n_wins,
         "realized_pnl": realized_pnl,
