@@ -180,12 +180,19 @@ class LiveStreamEngine:
                 with self._lock:
                     self._mids[sym].append((now, mid))
                     # Momentum calculation
-                    mids_hist = self._mids[sym]
+                    mids_hist = list(self._mids[sym])
                     mom = 0.0
+                    mom_accel = 0.0
                     if len(mids_hist) >= 4:
-                        # Compare latest mid to oldest mid in window
-                        old_mid = mids_hist[0][1]
-                        mom = (mid - old_mid) / old_mid * 1e4
+                        # Primary: compare latest mid to ~6s ago (middle of buffer)
+                        mid_old = mids_hist[0][1]
+                        mom = (mid - mid_old) / mid_old * 1e4
+                        # Acceleration: recent half vs older half slope
+                        half = len(mids_hist) // 2
+                        mid_mid = mids_hist[half][1]
+                        mom_recent = (mid - mid_mid) / mid_mid * 1e4 if mid_mid > 0 else 0.0
+                        mom_older = (mid_mid - mid_old) / mid_old * 1e4 if mid_old > 0 else 0.0
+                        mom_accel = mom_recent - mom_older  # positive = accelerating up
 
                     # Read CVD metrics from trade tape
                     cvd_5s, cvd_15s = self._calc_cvd(sym, now)
@@ -194,12 +201,22 @@ class LiveStreamEngine:
                     micro_skew = ((micro_px - mid) / mid) * 1e4 if mid > 0 else 0.0
 
                     # Confluence score: 0 to 100
-                    # Combines order book imbalance (40%), CVD tape flow (30%), micro-price skew (20%), and momentum (10%)
-                    imb_score = max(0.0, min(1.0, (imb5 - 0.5) * 3.0))  # 0.50 -> 0, 0.83 -> 1.0
+                    # OBI(40%) + CVD(30%) + micro-skew(20%) + momentum(10%)
+                    imb_score = max(0.0, min(1.0, (imb5 - 0.5) * 3.0))
                     cvd_score = max(0.0, min(1.0, (cvd_5s - 0.5) * 3.0))
                     micro_score = max(0.0, min(1.0, micro_skew / 2.0)) if micro_skew > 0 else 0.0
                     mom_score = max(0.0, min(1.0, (mom + 2.0) / 6.0)) if mom > -2.0 else 0.0
                     confluence = (imb_score * 40.0 + cvd_score * 30.0 + micro_score * 20.0 + mom_score * 10.0)
+
+                    # Wall ratio: largest single bid level notional vs total ask top-5 notional.
+                    # A large resting bid wall (> 1.5x avg ask depth) is a bullish microstructure signal.
+                    # Ranges 0-1: 0.5 = neutral depth, >0.7 = dominant bid wall present.
+                    if bids and a5 > 0:
+                        max_bid_notional = max(lvl[0] * lvl[1] for lvl in bids[:10])
+                        avg_ask_notional = a5 / max(len(asks[:5]), 1)
+                        wall_ratio = min(1.0, max_bid_notional / (avg_ask_notional + max_bid_notional))
+                    else:
+                        wall_ratio = 0.5
 
                     self._books[sym] = {
                         "bid": best_bid,
@@ -213,6 +230,8 @@ class LiveStreamEngine:
                         "cvd_5s": cvd_5s,
                         "cvd_15s": cvd_15s,
                         "mom": mom,
+                        "mom_accel": mom_accel,
+                        "wall_ratio": wall_ratio,
                         "confluence": confluence,
                         "ts": now,
                         "bids": bids[:5],
@@ -237,9 +256,33 @@ class LiveStreamEngine:
                 trades = await asyncio.wait_for(self._ex.watch_trades(sym, limit=50), timeout=8.0)
                 now = time.time()
                 with self._lock:
+                    # Get current mid for side inference fallback
+                    book = self._books.get(sym, {})
+                    cur_mid = book.get("mid", 0.0)
                     tape = self._trades[sym]
                     for tr in trades:
-                        side = tr.get("side", "")
+                        # Multi-field side detection — Gate.io sometimes uses
+                        # takerSide, taker_side, or leaves 'side' empty.
+                        side = (
+                            tr.get("side")
+                            or tr.get("takerSide")
+                            or tr.get("taker_side")
+                            or tr.get("info", {}).get("side", "")
+                            or tr.get("info", {}).get("type", "")
+                        )
+                        side = str(side).lower().strip()
+                        # Normalize aliases
+                        if side in ("b", "bid", "buy", "1"):
+                            side = "buy"
+                        elif side in ("s", "ask", "sell", "0", "-1"):
+                            side = "sell"
+                        else:
+                            # Fallback: infer from price vs current mid
+                            px_raw = float(tr.get("price") or 0.0)
+                            if cur_mid > 0 and px_raw > 0:
+                                side = "buy" if px_raw >= cur_mid else "sell"
+                            else:
+                                side = "buy"  # neutral default
                         amt = float(tr.get("amount") or 0.0)
                         px = float(tr.get("price") or 0.0)
                         tr_ts = float(tr.get("timestamp") or (now * 1000.0)) / 1000.0
