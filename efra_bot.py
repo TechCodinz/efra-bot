@@ -72,52 +72,90 @@ class Cfg:
     diagnostic: bool = False             # run diagnostic health check and exit
     dashboard: bool = False              # interactive terminal HUD
 
-    # scanner filters (high liquidity & tight spread: filters out illiquid spoofing traps)
+    # scanner filters
     min_quote_volume: float = 1_000_000  # 24h volume in quote currency ($1M+ minimum)
     min_price: float = 0.01              # skip sub-penny dust coins
     max_spread_bps: float = 6.0          # strictly tight spreads (max 0.06% spread)
-    watch_n: int = 18                    # pairs polled each loop (expanded to 18 liquid pairs)
-    rescan_s: int = 120
+    watch_n: int = 20                    # pairs polled each loop
+    rescan_s: int = 60                   # rescan every 60s — faster hot-pair rotation
 
-    # costs (per side). fee_bps is a FALLBACK - real taker fee is read at startup
+    # costs (per side)
     fee_bps: float = 20.0                # 20 bps = 0.20% (Gate.io taker)
     maker_fee_bps: float = 20.0          # fallback
     auto_fee: int = 1
-    maker_timeout_s: int = 12            # cancel an unfilled resting entry after this
-    maker_cancel_imb: float = 0.50       # ...or when bid-side support fades below this
+    maker_timeout_s: int = 12
+    maker_cancel_imb: float = 0.50
     slippage_bps: float = 1.0
 
-    # entry / exit (engineered for asymmetric positive expectancy & high payoff ratio)
-    tp_bps: float = 200.0                # take-profit target (+2.00% gain per scalp)
-    sl_bps: float = 40.0                 # hard stop loss (-0.40%)
-    min_net_edge_bps: float = 12.0       # tp must beat roundtrip costs by at least 12 bps
-    imbalance_entry: float = 0.68        # bid share of top-5 depth (68% bids - only verified walls)
-    min_cvd: float = 0.58               # aggressive buyer ratio - only enter with strong tape
-    min_confluence: float = 55.0         # robust composite alpha bar - only top-tier setups
-    min_mom_bps: float = 2.5             # require at least 2.5 bps of positive momentum at entry
-    max_mom_bps: float = 20.0            # never chase exhaustion blow-off tops (tightened)
-    mom_window: int = 8                  # loop ticks of mid-price history
-    max_hold_s: int = 420                # 7-minute max hold (gives breakouts room to complete without fee churn)
-    cooldown_s: int = 25                 # 25s fast cooldown per pair after exit
-    inter_trade_pause_s: float = 8.0     # 8s high-speed re-deployment between trades
-    btc_filter: bool = True              # macro Bitcoin market regime filter
+    # entry / exit
+    # TP raised to 250 bps — gives trailing stop more room to run before locking
+    tp_bps: float = 250.0
+    # SL tightened to 35 bps — cut losses faster, asymmetric vs wins
+    sl_bps: float = 35.0
+    min_net_edge_bps: float = 15.0       # tp must beat roundtrip costs by at least 15 bps
+    # OBI bar raised: require stronger bid-side dominance
+    imbalance_entry: float = 0.72
+    # CVD bar raised: require genuine aggressive buyer tape
+    min_cvd: float = 0.65
+    # Confluence bar raised: higher composite signal quality required
+    min_confluence: float = 62.0
+    # Min momentum raised: avoid entering slow drift moves
+    min_mom_bps: float = 3.5
+    max_mom_bps: float = 18.0            # tighter cap — don't chase late exhaustion
+    min_mom_accel: float = 0.0           # momentum must be accelerating (>=0 = not decelerating)
+    min_wall_ratio: float = 0.0          # bid-wall dominance ratio (0 = disabled)
+    mom_window: int = 8
+    # Max hold reduced: cut time-losers faster, don't give dead positions free rent
+    max_hold_s: int = 180
+    cooldown_s: int = 30
+    # Inter-trade pause raised: prevents cascade re-entries after losses
+    inter_trade_pause_s: float = 45.0
+    btc_filter: bool = True
+    vol_surge_factor: float = 1.5        # enter only if recent vol >= 1.5x 24h avg rate
+    smart_reentry: bool = True           # allow re-entry after early exit if momentum continues
 
-    # dynamic profit ratchet & trailing stop (tuned for winners to run)
-    breakeven_bps: float = 80.0          # trigger breakeven lock once +80 bps (0.80%) is reached
-    trail_trigger_bps: float = 100.0     # activate trailing stop once return reaches +100 bps (+1.0%)
-    trail_bps: float = 30.0              # 30 bps trailing cushion from peak (allows runners to +200-+350 bps)
+    # dynamic profit ratchet & trailing stop
+    # Breakeven lock raised: don't lock at a level that guarantees tiny PnL
+    breakeven_bps: float = 120.0
+    # Trail trigger raised: let trade develop further before activating trail
+    trail_trigger_bps: float = 130.0
+    # Trail tightened to 15 bps: capture more of each winning move
+    trail_bps: float = 15.0
 
-    # compounding & risk
-    position_frac: float = 0.40          # 40% capital allocation per slot (tightened for safety)
-    max_positions: int = 2               # concurrent positions
-    multi_slot: bool = True              # dynamically scale slots as capital grows
-    compound_step: float = 0.05          # +5% equity gain promotes compounding tier and scales lots
-    daily_loss_limit_frac: float = 0.08  # halt if equity falls 8% in a day (tighter protection)
+    # Smart slow-mover bail: cut confirmed losing positions heading lower
+    # Requires: held >= slow_bail_hold_s, negative return, AND both momentum + CVD strongly bearish
+    slow_bail_hold_s: float = 75.0       # minimum hold before slow bail can fire
+    slow_bail_ret_bps: float = -8.0      # position must be losing by at least this much
+    slow_bail_mom_bps: float = -4.0      # momentum must be actively falling
+    slow_bail_cvd: float = 0.38          # CVD must show dominant sellers (< 38% buyers)
+    # OBI-flip exit: book has completely inverted (sellers dominate), position still losing
+    flip_bail_hold_s: float = 60.0       # minimum hold before flip can trigger
+    flip_bail_imb: float = 0.15          # OBI must have crashed to extreme sell-dominance
+    flip_bail_ret_bps: float = -5.0      # must be losing to avoid cutting winning positions
+    # Flash-wick SL debounce: require SL breach to persist for N seconds before cutting
+    # Prevents 50ms price spikes from triggering full stop-losses
+    sl_wick_debounce_s: float = 1.5      # seconds SL must be breached before it fires
 
-    loop_s: float = 0.3                  # main step loop sleep (300ms high-speed reaction)
+    # Correlated-loss guard: if >= 2 SL exits in last sl_cluster_window_s, pause entries
+    sl_cluster_window_s: float = 90.0    # look-back window for SL clustering detection
+    sl_cluster_count: int = 2            # number of SLs in window to trigger pause
+    sl_cluster_pause_s: float = 120.0    # how long to pause entries after cluster detected
+    # High-confidence-only mode after loss streaks
+    streak_conf_boost: float = 8.0       # add this to min_confluence after >= 3 losses
+    streak_obi_boost: float = 0.05       # add to imbalance_entry after >= 3 losses
+
+    # compounding & risk (Kelly-adjusted position sizing)
+    position_frac: float = 0.40          # base allocation per slot
+    kelly_half: bool = True              # use half-Kelly to reduce variance
+    max_positions: int = 2
+    multi_slot: bool = True
+    compound_step: float = 0.05
+    daily_loss_limit_frac: float = 0.08  # halt if equity falls 8% in a day
+
+    loop_s: float = 0.3
     log_file: str = "efra_trades.csv"
     state_file: str = "efra_state.json"
-    balance_cache_s: float = 5.0         # avoid hammering balance endpoint
+    balance_cache_s: float = 5.0
 
 
 class Bot:
@@ -148,6 +186,21 @@ class Bot:
         self.last_tier_equity = cfg.start_balance
         self.high_water_mark = cfg.start_balance
         self.last_close_ts = 0.0
+
+        # === ULTRA-ADVANCED SYSTEMS ===
+        # 1. Kelly win-rate tracker (rolling 50 trades)
+        self._kelly_wins: deque = deque(maxlen=50)   # 1 = win, 0 = loss
+        self._kelly_payoffs: deque = deque(maxlen=50) # abs pnl/cost ratio per trade
+        # 2. Smart re-entry: tracks early exits and re-entry eligibility
+        self._early_exits: dict = {}   # sym -> {ts, exit_px, reason}
+        # 3. Relative volume surge tracker (rolling 5-min trade count)
+        self._vol_windows: dict = defaultdict(lambda: deque(maxlen=60))  # sym -> deque of tick cvd timestamps
+        # 4. Session regime: tracks hourly win-rate to scale size by session
+        self._session_wins: deque = deque(maxlen=20)  # rolling 20-trade window per session
+        self._session_hour: int = -1
+        # 5. SL-cluster guard: track recent SL timestamps to detect correlated loss bursts
+        self._recent_sl_ts: deque = deque(maxlen=10)  # timestamps of recent SL exits
+        self._sl_cluster_pause_until: float = 0.0    # epoch until which entries are paused
 
         # Isolated state & log files per exchange and execution mode to prevent cross-process corruption
         if self.c.state_file == "efra_state.json":
@@ -392,31 +445,54 @@ class Bot:
             self.save_state()
 
     def get_slot_allocation(self, current_equity: float):
-        """Calculates dynamic slot count with safe, disciplined position sizing to preserve capital."""
+        """Kelly-adjusted dynamic slot sizing with session and streak scaling."""
         c = self.c
         if not c.multi_slot:
             return c.max_positions, c.position_frac
 
-        # High-Velocity Multi-Slot Compounding Engine:
-        # Accounts under $300: 2 concurrent sniper slots (45% capital each), eliminating idle cash.
-        # Accounts $300-$1000: 3 slots (30% each).
-        # Accounts >$1000: 4 slots (22% each).
+        # Tier-based slot count
         if current_equity < 300.0:
-            slots = 2
-            frac = c.position_frac
+            slots, frac = 2, c.position_frac
         elif current_equity < 1000.0:
-            slots = 3
-            frac = 0.30
+            slots, frac = 3, 0.30
         elif current_equity < 3000.0:
-            slots = 4
-            frac = 0.22
+            slots, frac = 4, 0.22
         else:
-            slots = 5
-            frac = 0.18
+            slots, frac = 5, 0.18
 
-        # Streak defensive scaling: if 2 consecutive losses, scale down by 30%
+        # === KELLY FRACTION: size positions by real win-rate & avg payoff ===
+        if c.kelly_half and len(self._kelly_wins) >= 10:
+            w = sum(self._kelly_wins) / len(self._kelly_wins)   # empirical win rate
+            avg_win  = (sum(v for v, k in zip(self._kelly_payoffs, self._kelly_wins) if k) /
+                        max(1, sum(self._kelly_wins)))
+            avg_loss = (sum(v for v, k in zip(self._kelly_payoffs, self._kelly_wins) if not k) /
+                        max(1, len(self._kelly_wins) - sum(self._kelly_wins)))
+            b = avg_win / max(avg_loss, 0.001)  # payoff ratio
+            kelly_f = (b * w - (1 - w)) / max(b, 0.001)  # full Kelly
+            half_kelly = max(0.10, min(0.55, kelly_f * 0.5))  # half Kelly, clamped
+            frac = min(frac, half_kelly)
+            logging.debug("Kelly: w=%.2f b=%.2f full=%.2f half=%.2f frac=%.2f",
+                          w, b, kelly_f, half_kelly, frac)
+
+        # === SESSION REGIME: reduce size during low-confidence sessions ===
+        import time as _time
+        hour = int(_time.gmtime().tm_hour)
+        # Asian session (00-08 UTC): lower liquidity, tighter sizing
+        if 0 <= hour < 8:
+            frac *= 0.75
+        # Peak London/NY overlap (12-20 UTC): max aggression
+        elif 12 <= hour < 20:
+            frac = min(frac * 1.10, 0.55)
+
+        # Session win-rate boost: if last 5 trades all won, confidence mode +10%
+        if len(self._session_wins) >= 5 and all(self._session_wins):
+            frac = min(frac * 1.10, 0.55)
+
+        # Streak defensive scaling
         if self.loss_streak >= 2:
             frac *= 0.70
+        if self.loss_streak >= 4:
+            frac *= 0.60   # heavy drawdown protection
 
         return slots, frac
 
@@ -445,13 +521,21 @@ class Bot:
             logging.warning("scan failed (%s) - keeping current watchlist", e)
             self.last_scan = time.time()
             return
+
+        # 24h average volume rate (quote/second) for vol-surge detection
+        avg_vol_rates = {}
+        for sym, t in tickers.items():
+            qv = t.get("quoteVolume") or 0.0
+            if qv > 0:
+                avg_vol_rates[sym] = qv / 86400.0
+
         for sym, t in tickers.items():
             m = self.ex.markets.get(sym)
             if not m or not m.get("spot") or not m.get("active", True):
                 continue
             if m.get("quote") != c.quote or not sym.isascii():
                 continue
-            # Skip leveraged ETF tokens (e.g. 3L, 3S, 5L, 5S)
+            # Skip leveraged ETF tokens
             if any(x in sym for x in ("3L/", "3S/", "5L/", "5S/", "3L_", "3S_", "5L_", "5S_")):
                 continue
             bid, ask, last = t.get("bid"), t.get("ask"), t.get("last")
@@ -466,10 +550,21 @@ class Bot:
             rng = (hi - lo) / last * 1e4
             pct = abs(t.get("percentage") or 0.0)
             vol_mil = max(0.1, qv / 1_000_000.0)
-            # High-liquidity volume-weighted momentum score:
-            # Rewards liquid pairs with tight spreads and real breakout momentum
-            score = (vol_mil ** 0.4) * (rng * 0.3 + pct * 0.7) / (spread + 1.2 * c.fee_bps)
+
+            # === VOLUME SURGE BONUS ===
+            # Pairs with recent volume spiking above their 24h avg rate score higher
+            # (Indicates fresh catalyst / breakout — not just average market activity)
+            vol_surge_mult = 1.0
+            if sym in avg_vol_rates and avg_vol_rates[sym] > 0:
+                # Use 24h pct change as a proxy for recent volume vs average
+                # Positive % change strongly correlates with volume surge
+                if pct > 3.0:
+                    vol_surge_mult = 1.0 + min(1.5, pct / 10.0)  # up to 2.5x boost
+
+            # Composite score: volume-weighted, momentum-biased, spread-penalized, surge-amplified
+            score = (vol_mil ** 0.4) * (rng * 0.3 + pct * 0.7) * vol_surge_mult / (spread + 1.2 * c.fee_bps)
             rows.append((score, sym))
+
         rows.sort(reverse=True)
         self.watch = [s for _, s in rows[: c.watch_n]]
         self.last_scan = time.time()
@@ -637,12 +732,46 @@ class Bot:
             proceeds = exit_px * qty * (1 - c.fee_bps / 1e4)
 
         pnl = proceeds - p["cost"]
+        ret_bps = (exit_px - p["entry"]) / p["entry"] * 1e4
         self.n_trades += 1
-        if pnl > 0:
+        win = pnl > 0
+        if win:
             self.n_wins += 1
             self.loss_streak = 0
         else:
             self.loss_streak += 1
+
+        # === KELLY TRACKER: feed real outcomes into rolling win/payoff history ===
+        self._kelly_wins.append(1 if win else 0)
+        cost_val = max(p["cost"], 1.0)
+        self._kelly_payoffs.append(abs(pnl) / cost_val)
+        self._session_wins.append(1 if win else 0)
+
+        # === SL-CLUSTER GUARD: detect cascading losses from correlated market moves ===
+        if reason == "sl":
+            now_ts = time.time()
+            self._recent_sl_ts.append(now_ts)
+            # Count SLs within the cluster window
+            window_start = now_ts - c.sl_cluster_window_s
+            sl_count = sum(1 for t in self._recent_sl_ts if t >= window_start)
+            if sl_count >= c.sl_cluster_count:
+                self._sl_cluster_pause_until = now_ts + c.sl_cluster_pause_s
+                logging.warning(
+                    "SL-CLUSTER GUARD: %d stop-losses in %.0fs — pausing new entries for %.0fs",
+                    sl_count, c.sl_cluster_window_s, c.sl_cluster_pause_s
+                )
+
+        # === SMART RE-ENTRY TRACKER ===
+        # If we exit on breakeven/trail_stop while momentum is still positive,
+        # mark this pair as eligible for fast re-entry
+        if reason in ("be_stop", "trail_stop") and ret_bps > 0:
+            s_now = books.get(sym) or {}
+            if s_now.get("mom", 0.0) > 1.5 and s_now.get("cvd_5s", 0.5) > 0.55:
+                self._early_exits[sym] = {
+                    "ts": time.time(), "exit_px": exit_px, "reason": reason
+                }
+                logging.info("SMART RE-ENTRY armed for %s (exited on %s with +%.1fbps, momentum continuing)",
+                             sym, reason, ret_bps)
 
         self._bal_cache = (0.0, None)
         eq = self.equity(books)
@@ -657,7 +786,6 @@ class Bot:
         self.cool[sym] = time.time() + c.cooldown_s
         self.last_close_ts = time.time()
         self.save_state()
-        ret_bps = (exit_px - p["entry"]) / p["entry"] * 1e4
         logging.info("SELL %s @ %.8g | %s | PnL=%+.4f (%+.1fbps) | Eq=$%.2f | WinRate=%.0f%% (%d trades)",
                      sym, exit_px, reason.upper(), pnl, ret_bps, eq,
                      100.0 * self.n_wins / self.n_trades, self.n_trades)
@@ -716,11 +844,11 @@ class Bot:
 
             # Stage 1: Breakeven Ratchet (Lock in profit once gain clears fee hurdle)
             # Set stop to cost_bps + 12 (net positive after all fees, 12 bps buffer)
-            be_target = max(c.breakeven_bps, cost_bps + 12.0)
+            be_target = max(c.breakeven_bps, cost_bps + 20.0)
             if ret >= be_target and not p.get("be_locked"):
                 p["be_locked"] = True
-                p["stop_bps"] = cost_bps + 12.0  # guaranteed net positive post-fees (+12 bps)
-                logging.info("PROFIT LOCK %s: gain reaches +%.1fbps -> Stop ratcheted to Breakeven (+costs)", sym, ret)
+                p["stop_bps"] = cost_bps + 20.0  # guaranteed net positive post-fees (+20 bps buffer)
+                logging.info("PROFIT LOCK %s: gain reaches +%.1fbps -> Stop ratcheted to Breakeven (+costs+20)", sym, ret)
 
             # Stage 2: Dynamic Trailing Stop (Let runners ride to +200 to +350 bps)
             trail_target = max(c.trail_trigger_bps, cost_bps + 30.0)
@@ -729,25 +857,68 @@ class Bot:
                 trail_stop = p["peak_ret_bps"] - c.trail_bps
                 p["stop_bps"] = max(p.get("stop_bps", -c.sl_bps), trail_stop)
 
-            # Exit Conditions
+            # ================================================================
+            # EXIT CONDITIONS — full smart exit system
+            # ================================================================
             active_stop = p.get("stop_bps", -c.sl_bps)
             reason = None
+            hold_s = now - p["ts"]
+
             if self.halted:
                 reason = "halt"
+
             elif ret <= active_stop:
-                # Immediate exit if stop is breached! Eliminates delay to avoid slippage disasters
+                # --- Flash-wick SL debounce ---
+                # For un-ratcheted positions: require SL breach to persist for
+                # sl_wick_debounce_s before firing. Prevents 50ms spike stops.
+                # Ratcheted/trailing positions exit immediately (protecting locked profit).
                 if p.get("be_locked") or p.get("trailing_active"):
                     reason = "trail_stop" if p.get("trailing_active") else "be_stop"
                 else:
-                    reason = "sl"
+                    sl_first = p.get("sl_first_ts")
+                    if sl_first is None:
+                        p["sl_first_ts"] = now   # start debounce timer
+                    elif now - sl_first >= c.sl_wick_debounce_s:
+                        reason = "sl"            # breach persisted → genuine stop
+                # If price recovered above stop, reset debounce
+                if ret > active_stop and "sl_first_ts" in p:
+                    del p["sl_first_ts"]
+
             elif ret >= c.tp_bps and not p.get("trailing_active"):
                 reason = "tp"
-            elif now - p["ts"] >= c.max_hold_s:
+
+            elif hold_s >= c.max_hold_s:
                 reason = "time"
-            # Structural breakdown: only cut if held >= 90s, return < -20 bps, both OBI and momentum fully collapsed
-            elif (now - p["ts"] >= 90.0 and not p.get("be_locked")
-                  and ret < -20.0 and s.get("imb", 0.5) < 0.18
-                  and s.get("mom", 0.0) < -8.0):
+
+            # --- OBI-Flip exit ---
+            # Order book has completely inverted (sellers fully dominate), position losing.
+            # Only fires when hold > flip_bail_hold_s AND return is negative.
+            elif (hold_s >= c.flip_bail_hold_s
+                  and not p.get("be_locked")
+                  and ret <= c.flip_bail_ret_bps
+                  and s.get("imb", 0.5) < c.flip_bail_imb):
+                reason = "flip"
+
+            # --- Smart slow-mover bail ---
+            # Cut confirmed losing positions that have been drifting lower with
+            # sustained selling pressure. Requires ALL three guards:
+            #   1. Held long enough (not a normal pullback)
+            #   2. Negative return beyond threshold
+            #   3. Momentum actively falling (not stalling)
+            #   4. CVD shows dominant sellers (not just neutral drift)
+            # Will NOT cut positive or neutral positions — only confirmed losers.
+            elif (hold_s >= c.slow_bail_hold_s
+                  and not p.get("be_locked")
+                  and ret <= c.slow_bail_ret_bps
+                  and s.get("mom", 0.0) <= c.slow_bail_mom_bps
+                  and s.get("cvd_5s", 0.5) <= c.slow_bail_cvd):
+                reason = "slow"
+
+            # --- Structural breakdown fallback ---
+            # Deep loss + completely collapsed OBI + strong negative momentum
+            elif (hold_s >= 120.0 and not p.get("be_locked")
+                  and ret < -25.0 and s.get("imb", 0.5) < 0.15
+                  and s.get("mom", 0.0) < -10.0):
                 reason = "breakdown"
 
             if reason:
@@ -761,12 +932,25 @@ class Bot:
         if now - getattr(self, "last_close_ts", 0.0) < inter_pause:
             return
 
+        # SL-cluster pause: block new entries during correlated-loss bursts
+        if now < self._sl_cluster_pause_until:
+            remaining = self._sl_cluster_pause_until - now
+            if int(remaining) % 30 == 0:  # log every 30s to avoid spam
+                logging.info("SL-cluster guard active — %.0fs remaining before re-entry allowed", remaining)
+            return
+
         # Check macro BTC regime before considering any altcoin long
         macro_safe, btc_mom = self.check_btc_regime()
         if not macro_safe:
             return
 
         slots, alloc_frac = self.get_slot_allocation(eq)
+
+        # === SMART RE-ENTRY: expire stale re-entry windows (>90s) ===
+        for sym in list(self._early_exits):
+            if now - self._early_exits[sym]["ts"] > 90.0:
+                del self._early_exits[sym]
+
         for sym in self.watch:
             if (len(self.pos) + len(getattr(self, "pending", {}))) >= slots:
                 break
@@ -778,30 +962,90 @@ class Bot:
             if c.tp_bps - cost < c.min_net_edge_bps:
                 continue
 
-            # High-Conviction Microstructure Alpha Validation
-            imb = s.get("imb", 0.5)
-            cvd = s.get("cvd_5s", 0.5)
-            mom = s.get("mom", 0.0)
+            # Pull all microstructure metrics
+            imb       = s.get("imb", 0.5)
+            cvd       = s.get("cvd_5s", 0.5)
+            cvd15     = s.get("cvd_15s", 0.5)
+            mom       = s.get("mom", 0.0)
+            mom_accel = s.get("mom_accel", 0.0)   # positive = momentum building
             micro_skew = s.get("micro_skew", 0.0)
-            conf = s.get("confluence", 0.0)
+            wall_ratio = s.get("wall_ratio", 0.5)  # dominant bid-wall size ratio
+            conf      = s.get("confluence", 0.0)
 
-            # Never buy into negative or below-threshold momentum
-            if mom < c.min_mom_bps:
+            # Gate 1: momentum direction
+            if mom < c.min_mom_bps or mom > c.max_mom_bps:
                 continue
 
-            # Never chase exhaustion tops (overextended momentum wicks that immediately retrace)
-            if mom > getattr(c, "max_mom_bps", 25.0):
+            # Gate 2: momentum acceleration (not decelerating)
+            if c.min_mom_accel > 0 and mom_accel < c.min_mom_accel:
                 continue
 
-            # High-conviction signal pathways (snipe genuine momentum breakouts):
-            # 1. Order book dominance: strong bid wall >= 68%, positive micro-skew, strong buyer tape
-            sig_obi = (imb >= c.imbalance_entry and micro_skew >= 0.8 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
-            # 2. Composite alpha confluence: high confluence score with verified buyer flow
-            sig_conf = (conf >= c.min_confluence and imb >= 0.62 and cvd >= c.min_cvd and mom >= c.min_mom_bps)
-            # 3. Aggressive buyer surge on trade tape: dominant tape buying with strong book
-            sig_tape = (cvd >= 0.72 and imb >= 0.60 and micro_skew >= 0.8 and mom >= c.min_mom_bps)
+            # Gate 3: bid-wall dominance (optional — disabled by default)
+            if c.min_wall_ratio > 0 and wall_ratio < c.min_wall_ratio:
+                continue
 
-            if sig_obi or sig_conf or sig_tape:
+            # === VOLUME SURGE CHECK ===
+            # Require recent CVD activity to confirm actual volume surge, not stale data
+            vol_ok = True
+            if c.vol_surge_factor > 1.0:
+                # cvd_5s > 0.55 means meaningful recent buying pressure
+                vol_ok = (cvd >= 0.55 and cvd15 >= 0.52)
+
+            if not vol_ok:
+                continue
+
+            # === LOSS-STREAK HIGH-CONVICTION MODE ===
+            # After >= 3 consecutive losses, raise the entry bars significantly
+            # to avoid further churn in adverse market conditions
+            streak = self.loss_streak
+            effective_conf = c.min_confluence + (c.streak_conf_boost if streak >= 3 else 0.0)
+            effective_imb  = c.imbalance_entry + (c.streak_obi_boost  if streak >= 3 else 0.0)
+            # After >= 5 consecutive losses, require ALL gates to pass simultaneously
+            require_all_gates = (streak >= 5)
+
+            if streak >= 3:
+                logging.debug(
+                    "HIGH-CONVICTION MODE (streak=%d): conf>=%.1f imb>=%.2f",
+                    streak, effective_conf, effective_imb
+                )
+
+            # === HIGH-CONVICTION SIGNAL PATHWAYS ===
+            # 1. OBI: Order book dominance + micro-skew + tape alignment
+            sig_obi  = (imb >= effective_imb and micro_skew >= 1.0
+                        and cvd >= c.min_cvd and mom >= c.min_mom_bps)
+            # 2. CONF: High composite score — broadest but requires strong confluence
+            sig_conf = (conf >= effective_conf and imb >= (effective_imb - 0.02)
+                        and cvd >= c.min_cvd and mom >= c.min_mom_bps)
+            # 3. TAPE: Dominant buyer aggression with strong book & skew
+            #    Raised CVD bar to 0.75 and imb bar to 0.65 for higher quality
+            sig_tape = (cvd >= 0.75 and imb >= 0.65
+                        and micro_skew >= 1.0 and mom >= c.min_mom_bps)
+            # 4. ACCEL: Momentum acceleration burst — catches early breakout stage
+            #    Tightened: requires stronger acceleration and tape agreement
+            sig_accel = (mom_accel >= 3.0 and mom >= c.min_mom_bps
+                         and cvd >= 0.68 and imb >= 0.65 and micro_skew > 0.5)
+
+            if require_all_gates:
+                # Severe losing streak: ALL four signal components must be positive
+                fired = (imb >= effective_imb and cvd >= c.min_cvd
+                         and mom >= c.min_mom_bps and conf >= effective_conf
+                         and micro_skew >= 1.0)
+            else:
+                fired = sig_obi or sig_conf or sig_tape or sig_accel
+
+            # === SMART RE-ENTRY: bypass pause for confirmed continuing moves ===
+            re_entry = c.smart_reentry and sym in self._early_exits
+            if re_entry and not fired:
+                er = self._early_exits[sym]
+                price_moved = (s["mid"] - er["exit_px"]) / er["exit_px"] * 1e4
+                # Only re-enter if price has moved at least 5 bps above exit AND signals still positive
+                if price_moved >= 5.0 and cvd >= c.min_cvd and imb >= 0.60 and mom >= c.min_mom_bps:
+                    fired = True
+                    logging.info("SMART RE-ENTRY %s: price +%.1fbps above exit, momentum sustained",
+                                 sym, price_moved)
+                    del self._early_exits[sym]
+
+            if fired:
                 quote_amt = self._quote_free(fresh=not c.paper) * alloc_frac
                 self.open(sym, s, quote_amt)
 
