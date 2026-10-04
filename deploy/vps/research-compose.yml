@@ -1,0 +1,71 @@
+services:
+  efra-research-recorder:
+    build:
+      context: /opt/app-platform/src/efra-sniper-v2
+      dockerfile: Dockerfile.vps
+    container_name: efra-research-recorder
+    restart: unless-stopped
+    command:
+      - python
+      - efra_research.py
+      - record
+      - --exchange
+      - gate
+      - --quote
+      - USDT
+      - --pairs
+      - "6"
+      - --hours
+      - "720"
+      - --interval
+      - "3.0"
+      - --min-quote-volume
+      - "2000000"
+      - --max-spread-bps
+      - "8.0"
+      - --db
+      - /research/efra_research.db
+    volumes:
+      - /opt/app-platform/state/efra-research:/research
+    mem_limit: 384m
+    cpus: 0.50
+
+  efra-research-analyzer:
+    build:
+      context: /opt/app-platform/src/efra-sniper-v2
+      dockerfile: Dockerfile.vps
+    container_name: efra-research-analyzer
+    restart: unless-stopped
+    depends_on:
+      - efra-research-recorder
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+        while true; do
+          sleep 3600
+          stamp="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          tmp=/research/latest-analysis.txt.tmp
+          out=/research/latest-analysis.txt
+          if python efra_research.py analyze               --db /research/efra_research.db               --fee-bps 20               --maker-fee-bps 20 >"$$tmp" 2>&1; then
+            mv "$$tmp" "$$out"
+            {
+              echo
+              echo "===== $$stamp ====="
+              cat "$$out"
+            } >> /research/analysis-history.log
+            cat "$$out"
+          else
+            {
+              echo
+              echo "===== $$stamp ANALYSIS FAILED ====="
+              cat "$$tmp"
+            } >> /research/analysis-history.log
+            rm -f "$$tmp"
+          fi
+        done
+    volumes:
+      - /opt/app-platform/state/efra-research:/research
+    mem_limit: 256m
+    cpus: 0.25
