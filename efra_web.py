@@ -83,9 +83,23 @@ def build_cfg() -> Cfg:
     c.imbalance_entry = _env_float("EFRA_IMBALANCE_ENTRY", c.imbalance_entry)
     c.min_mom_bps = _env_float("EFRA_MIN_MOM_BPS", c.min_mom_bps)
     c.max_mom_bps = _env_float("EFRA_MAX_MOM_BPS", c.max_mom_bps)
-    c.min_impulse_cost_ratio = _env_float("EFRA_MIN_IMPULSE_COST_RATIO", c.min_impulse_cost_ratio)
-    c.min_entry_confidence = _env_float("EFRA_MIN_ENTRY_CONFIDENCE", c.min_entry_confidence)
-    c.min_signal_paths = _env_int("EFRA_MIN_SIGNAL_PATHS", c.min_signal_paths)
+    c.min_mom_accel = _env_float("EFRA_MIN_MOM_ACCEL", c.min_mom_accel)
+    c.min_wall_ratio = _env_float("EFRA_MIN_WALL_RATIO", c.min_wall_ratio)
+    c.vol_surge_factor = _env_float("EFRA_VOL_SURGE_FACTOR", c.vol_surge_factor)
+    c.smart_reentry = _env_bool("EFRA_SMART_REENTRY", c.smart_reentry)
+    c.slow_bail_hold_s = _env_float("EFRA_SLOW_BAIL_HOLD_S", c.slow_bail_hold_s)
+    c.slow_bail_ret_bps = _env_float("EFRA_SLOW_BAIL_RET_BPS", c.slow_bail_ret_bps)
+    c.slow_bail_mom_bps = _env_float("EFRA_SLOW_BAIL_MOM_BPS", c.slow_bail_mom_bps)
+    c.slow_bail_cvd = _env_float("EFRA_SLOW_BAIL_CVD", c.slow_bail_cvd)
+    c.flip_bail_hold_s = _env_float("EFRA_FLIP_BAIL_HOLD_S", c.flip_bail_hold_s)
+    c.flip_bail_imb = _env_float("EFRA_FLIP_BAIL_IMB", c.flip_bail_imb)
+    c.flip_bail_ret_bps = _env_float("EFRA_FLIP_BAIL_RET_BPS", c.flip_bail_ret_bps)
+    c.sl_wick_debounce_s = _env_float("EFRA_SL_WICK_DEBOUNCE_S", c.sl_wick_debounce_s)
+    c.sl_cluster_window_s = _env_float("EFRA_SL_CLUSTER_WINDOW_S", c.sl_cluster_window_s)
+    c.sl_cluster_count = _env_int("EFRA_SL_CLUSTER_COUNT", c.sl_cluster_count)
+    c.sl_cluster_pause_s = _env_float("EFRA_SL_CLUSTER_PAUSE_S", c.sl_cluster_pause_s)
+    c.streak_conf_boost = _env_float("EFRA_STREAK_CONF_BOOST", c.streak_conf_boost)
+    c.streak_obi_boost = _env_float("EFRA_STREAK_OBI_BOOST", c.streak_obi_boost)
     c.inter_trade_pause_s = _env_float("EFRA_INTER_TRADE_PAUSE_S", c.inter_trade_pause_s)
     c.position_frac = _env_float("EFRA_POSITION_FRAC", c.position_frac)
     c.daily_loss_limit_frac = _env_float("EFRA_DAILY_LOSS_LIMIT_FRAC", c.daily_loss_limit_frac)
@@ -288,40 +302,71 @@ def snapshot() -> dict[str, Any]:
             skew = float(b.get("micro_skew", 0))
             mom = float(b.get("mom", 0))
             conf = float(b.get("confluence", 0))
+            cvd15 = float(b.get("cvd_15s", 0.5))
+            mom_accel = float(b.get("mom_accel", 0))
+            wall_ratio = float(b.get("wall_ratio", 0.5))
             cost = 2 * (bot.c.fee_bps + bot.c.slippage_bps) + spread
             net_edge = bot.c.tp_bps - cost
-            effective_min_mom = max(
-                bot.c.min_mom_bps,
-                cost * bot.c.min_impulse_cost_ratio,
+            edge_ok = net_edge >= bot.c.min_net_edge_bps
+            mom_ok = bot.c.min_mom_bps <= mom <= bot.c.max_mom_bps
+            accel_ok = bot.c.min_mom_accel <= 0 or mom_accel >= bot.c.min_mom_accel
+            wall_ok = bot.c.min_wall_ratio <= 0 or wall_ratio >= bot.c.min_wall_ratio
+            volume_ok = (
+                True
+                if bot.c.vol_surge_factor <= 1.0
+                else (cvd >= 0.55 and cvd15 >= 0.52)
             )
-            mom_ok = effective_min_mom <= mom <= bot.c.max_mom_bps
+            streak = int(getattr(bot, "loss_streak", 0))
+            effective_conf = bot.c.min_confluence + (
+                bot.c.streak_conf_boost if streak >= 3 else 0.0
+            )
+            effective_imb = bot.c.imbalance_entry + (
+                bot.c.streak_obi_boost if streak >= 3 else 0.0
+            )
             sig_obi = (
-                imb >= bot.c.imbalance_entry
-                and skew >= 0.8
+                imb >= effective_imb
+                and skew >= 1.0
                 and cvd >= bot.c.min_cvd
-                and mom >= effective_min_mom
+                and mom >= bot.c.min_mom_bps
             )
             sig_conf = (
-                conf >= bot.c.min_confluence
-                and imb >= 0.62
+                conf >= effective_conf
+                and imb >= (effective_imb - 0.02)
                 and cvd >= bot.c.min_cvd
-                and mom >= effective_min_mom
+                and mom >= bot.c.min_mom_bps
             )
             sig_tape = (
-                cvd >= 0.72
-                and imb >= 0.60
-                and skew >= 0.8
-                and mom >= effective_min_mom
+                cvd >= 0.75
+                and imb >= 0.65
+                and skew >= 1.0
+                and mom >= bot.c.min_mom_bps
+            )
+            sig_accel = (
+                mom_accel >= 3.0
+                and mom >= bot.c.min_mom_bps
+                and cvd >= 0.68
+                and imb >= 0.65
+                and skew > 0.5
             )
             paths = [
                 name
-                for name, passed in (("OBI", sig_obi), ("CONF", sig_conf), ("TAPE", sig_tape))
+                for name, passed in (
+                    ("OBI", sig_obi),
+                    ("CONF", sig_conf),
+                    ("TAPE", sig_tape),
+                    ("ACCEL", sig_accel),
+                )
                 if passed
             ]
-            path_ok = len(paths) >= bot.c.min_signal_paths
-            confidence_ok = conf >= bot.c.min_entry_confidence
-            edge_ok = net_edge >= bot.c.min_net_edge_bps
-            ready = mom_ok and path_ok and confidence_ok and edge_ok
+            require_all = streak >= 5
+            fired = (
+                imb >= effective_imb
+                and cvd >= bot.c.min_cvd
+                and mom >= bot.c.min_mom_bps
+                and conf >= effective_conf
+                and skew >= 1.0
+            ) if require_all else bool(paths)
+            ready = edge_ok and mom_ok and accel_ok and wall_ok and volume_ok and fired
             radar.append({
                 "symbol": sym,
                 "mid": float(b.get("mid", 0)),
@@ -332,11 +377,15 @@ def snapshot() -> dict[str, Any]:
                 "momentum_bps": mom,
                 "confluence": conf,
                 "net_edge_bps": net_edge,
-                "effective_min_mom_bps": effective_min_mom,
-                "path": "+".join(paths) if paths else "—",
+                "cvd_15s": cvd15,
+                "momentum_accel_bps": mom_accel,
+                "wall_ratio": wall_ratio,
+                "effective_confidence": effective_conf,
+                "effective_imbalance": effective_imb,
+                "path": "+".join(paths) if paths else ("ALL" if require_all and fired else "—"),
                 "path_count": len(paths),
-                "path_required": bot.c.min_signal_paths,
-                "confidence_required": bot.c.min_entry_confidence,
+                "path_required": 4 if require_all else 1,
+                "confidence_required": effective_conf,
                 "ready": ready,
                 "status": "position" if sym in bot.pos else "pending" if sym in pending_map else "signal_ready" if ready else "monitoring",
             })
@@ -413,9 +462,23 @@ def snapshot() -> dict[str, Any]:
                 "min_cvd": bot.c.min_cvd,
                 "min_mom_bps": bot.c.min_mom_bps,
                 "max_mom_bps": bot.c.max_mom_bps,
-                "min_impulse_cost_ratio": bot.c.min_impulse_cost_ratio,
-                "min_entry_confidence": bot.c.min_entry_confidence,
-                "min_signal_paths": bot.c.min_signal_paths,
+                "min_mom_accel": bot.c.min_mom_accel,
+                "min_wall_ratio": bot.c.min_wall_ratio,
+                "vol_surge_factor": bot.c.vol_surge_factor,
+                "smart_reentry": 1 if bot.c.smart_reentry else 0,
+                "slow_bail_hold_s": bot.c.slow_bail_hold_s,
+                "slow_bail_ret_bps": bot.c.slow_bail_ret_bps,
+                "slow_bail_mom_bps": bot.c.slow_bail_mom_bps,
+                "slow_bail_cvd": bot.c.slow_bail_cvd,
+                "flip_bail_hold_s": bot.c.flip_bail_hold_s,
+                "flip_bail_imb": bot.c.flip_bail_imb,
+                "flip_bail_ret_bps": bot.c.flip_bail_ret_bps,
+                "sl_wick_debounce_s": bot.c.sl_wick_debounce_s,
+                "sl_cluster_window_s": bot.c.sl_cluster_window_s,
+                "sl_cluster_count": bot.c.sl_cluster_count,
+                "sl_cluster_pause_s": bot.c.sl_cluster_pause_s,
+                "streak_conf_boost": bot.c.streak_conf_boost,
+                "streak_obi_boost": bot.c.streak_obi_boost,
                 "daily_loss_limit_pct": bot.c.daily_loss_limit_frac * 100.0,
                 "loop_s": bot.c.loop_s,
             },
