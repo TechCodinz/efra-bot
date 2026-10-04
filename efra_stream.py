@@ -208,6 +208,16 @@ class LiveStreamEngine:
                     mom_score = max(0.0, min(1.0, (mom + 2.0) / 6.0)) if mom > -2.0 else 0.0
                     confluence = (imb_score * 40.0 + cvd_score * 30.0 + micro_score * 20.0 + mom_score * 10.0)
 
+                    # Wall ratio: largest single bid level notional vs total ask top-5 notional.
+                    # A large resting bid wall (> 1.5x avg ask depth) is a bullish microstructure signal.
+                    # Ranges 0-1: 0.5 = neutral depth, >0.7 = dominant bid wall present.
+                    if bids and a5 > 0:
+                        max_bid_notional = max(lvl[0] * lvl[1] for lvl in bids[:10])
+                        avg_ask_notional = a5 / max(len(asks[:5]), 1)
+                        wall_ratio = min(1.0, max_bid_notional / (avg_ask_notional + max_bid_notional))
+                    else:
+                        wall_ratio = 0.5
+
                     self._books[sym] = {
                         "bid": best_bid,
                         "ask": best_ask,
@@ -221,6 +231,7 @@ class LiveStreamEngine:
                         "cvd_15s": cvd_15s,
                         "mom": mom,
                         "mom_accel": mom_accel,
+                        "wall_ratio": wall_ratio,
                         "confluence": confluence,
                         "ts": now,
                         "bids": bids[:5],
