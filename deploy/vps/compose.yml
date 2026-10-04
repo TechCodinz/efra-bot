@@ -11,6 +11,7 @@ services:
       - "127.0.0.1:${EFRA_HOST_PORT:-18085}:8080"
     volumes:
       - /opt/app-platform/state/efra-sniper-v2:/data
+      - /opt/app-platform/state/efra-research:/research:ro
     healthcheck:
       test:
         - CMD
