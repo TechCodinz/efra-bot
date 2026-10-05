@@ -16,9 +16,10 @@ done
 mkdir -p "$(dirname "$SRC")" "$STACK" "$STATE"
 
 if [ -d "$SRC/.git" ]; then
-  git -C "$SRC" fetch origin vps-smart-exit-20261004
-  git -C "$SRC" checkout vps-smart-exit-20261004
-  git -C "$SRC" reset --hard origin/master
+  git -C "$SRC" fetch origin \
+    vps-smart-exit-20261004:refs/remotes/origin/vps-smart-exit-20261004
+  git -C "$SRC" checkout -B vps-smart-exit-20261004 \
+    refs/remotes/origin/vps-smart-exit-20261004
 else
   rm -rf "$SRC"
   git clone --branch vps-smart-exit-20261004 --single-branch "$REPO" "$SRC"
